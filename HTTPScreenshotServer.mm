@@ -14,9 +14,14 @@
 #import <arpa/inet.h>
 #import <netinet/in.h>
 #import <pthread.h>
+#import <semaphore.h>
 #import <string.h>
 #import <sys/socket.h>
 #import <unistd.h>
+
+/* 最大并发截图请求数，避免高并发时创建过多线程导致系统拒绝连接 */
+static const int kMaxConcurrentRequests = 4;
+static sem_t gConcurrencySem;
 
 /* HandleClientConnection 在下方定义，线程入口需要前向声明 */
 static void HandleClientConnection(int client);
@@ -28,11 +33,17 @@ struct ClientContext {
 
 /* 客户端处理线程入口 */
 static void *HandleClientThread(void *arg) {
-    struct ClientContext *ctx = (struct ClientContext *)arg;
-    int client = ctx->clientSocket;
-    free(ctx);
-    HandleClientConnection(client);
-    return NULL;
+    @autoreleasepool {
+        struct ClientContext *ctx = (struct ClientContext *)arg;
+        int client = ctx->clientSocket;
+        free(ctx);
+        @try {
+            HandleClientConnection(client);
+        } @finally {
+            sem_post(&gConcurrencySem);
+        }
+        return NULL;
+    }
 }
 
 static NSData *CaptureJPEGOnMainThread(void) {
@@ -141,18 +152,33 @@ extern "C" void StartScreenshotServer(uint16_t port) {
         return;
     }
 
-    if (listen(serverSocket, 5) < 0) {
+    if (listen(serverSocket, 128) < 0) {
         [[TSLogger sharedLogger] log:@"监听失败"];
         close(serverSocket);
         return;
     }
 
-    [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"HTTP 服务器已在端口 %d 监听", port]];
+    [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"HTTP 服务器已在端口 %d 监听，最大并发 %d", port, kMaxConcurrentRequests]];
+
+    if (sem_init(&gConcurrencySem, 0, kMaxConcurrentRequests) != 0) {
+        [[TSLogger sharedLogger] log:@"初始化并发控制信号量失败"];
+        close(serverSocket);
+        return;
+    }
 
     while (1) {
         int client = accept(serverSocket, NULL, NULL);
         if (client < 0)
             continue;
+
+        /* 如果并发数已满，直接返回 503，避免无限创建线程 */
+        if (sem_trywait(&gConcurrencySem) != 0) {
+            const char *resp = "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            send(client, resp, strlen(resp), 0);
+            close(client);
+            [[TSLogger sharedLogger] log:@"并发请求已满，返回 503"];
+            continue;
+        }
 
         /* 每个连接用独立 pthread 处理，避免 GCD 在 daemon 里不工作 */
         struct ClientContext *ctx = (struct ClientContext *)malloc(sizeof(struct ClientContext));

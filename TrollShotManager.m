@@ -25,6 +25,7 @@
 #define kDaemonName        @"trollshotd"
 #define kLaunchdPlistName  @"com.hogan.trollshot.plist"
 #define kDaemonDestDir     @"/var/mobile/trollshot"
+#define kLaunchDaemonsDir  @"/Library/LaunchDaemons"
 #define kLogDir            @"/var/mobile/trollshot"
 #define kListenPort        8080
 
@@ -57,9 +58,9 @@
     return [kDaemonDestDir stringByAppendingPathComponent:kDaemonName];
 }
 
-/* launchd plist 目标路径（保留，供高级用户使用） */
+/* launchd plist 目标路径，用于开机自启 */
 - (NSString *)installedPlistPath {
-    return [kDaemonDestDir stringByAppendingPathComponent:kLaunchdPlistName];
+    return [kLaunchDaemonsDir stringByAppendingPathComponent:kLaunchdPlistName];
 }
 
 /* PID 文件路径 */
@@ -105,10 +106,13 @@
     return YES;
 }
 
-/* 判断 daemon 是否已安装 */
+/* 判断 daemon 是否已安装（同时检查二进制和 launchd plist） */
 - (BOOL)isDaemonInstalled {
+    NSFileManager *fm = [NSFileManager defaultManager];
     BOOL isDir = NO;
-    return [[NSFileManager defaultManager] fileExistsAtPath:[self installedDaemonPath] isDirectory:&isDir] && !isDir;
+    BOOL hasBin = [fm fileExistsAtPath:[self installedDaemonPath] isDirectory:&isDir] && !isDir;
+    BOOL hasPlist = [fm fileExistsAtPath:[self installedPlistPath]];
+    return hasBin && hasPlist;
 }
 
 /* 通过连接本地端口判断服务是否正在运行 */
@@ -134,15 +138,25 @@
     return NO;
 }
 
-/* 安装 daemon 到 /var/mobile/trollshot */
+/* 安装 daemon 到 /var/mobile/trollshot，同时将 plist 放入 /Library/LaunchDaemons 以支持开机自启 */
 - (BOOL)installDaemon:(NSError **)error {
     NSString *srcBin = [self bundledDaemonPath];
+    NSString *srcPlist = [self bundledPlistPath];
 
     if (![[NSFileManager defaultManager] fileExistsAtPath:srcBin]) {
         if (error) {
             *error = [NSError errorWithDomain:@"TrollShot"
                                          code:2001
                                      userInfo:@{NSLocalizedDescriptionKey : @"应用内未找到 trollshotd，请重新安装 IPA"}];
+        }
+        return NO;
+    }
+
+    if (![[NSFileManager defaultManager] fileExistsAtPath:srcPlist]) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"TrollShot"
+                                         code:2005
+                                     userInfo:@{NSLocalizedDescriptionKey : @"应用内未找到 launchd plist，请重新安装 IPA"}];
         }
         return NO;
     }
@@ -162,8 +176,22 @@
         }
         return NO;
     }
-
     chmod([[self installedDaemonPath] fileSystemRepresentation], 0755);
+
+    /* 复制 plist 到 LaunchDaemons，系统卷需要可写 */
+    if (![self ensureDirectory:kLaunchDaemonsDir error:error]) return NO;
+    [[NSFileManager defaultManager] removeItemAtPath:[self installedPlistPath] error:nil];
+    if (![[NSFileManager defaultManager] copyItemAtPath:srcPlist
+                                                 toPath:[self installedPlistPath]
+                                                  error:&copyErr]) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"TrollShot"
+                                         code:2004
+                                     userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"写入 /Library/LaunchDaemons 失败: %@\n请确保设备已越狱或系统卷可写\n源: %@\n目标: %@", copyErr.localizedDescription, srcPlist, [self installedPlistPath]]}];
+        }
+        return NO;
+    }
+    chmod([[self installedPlistPath] fileSystemRepresentation], 0644);
     return YES;
 }
 
@@ -221,7 +249,7 @@
     return YES;
 }
 
-/* 启动 daemon */
+/* 启动 daemon：安装后通过 launchctl load 加载 plist，支持开机自启 */
 - (BOOL)startDaemon:(NSError **)error {
     if (!self.isDaemonInstalled) {
         if (![self installDaemon:error]) return NO;
@@ -229,10 +257,25 @@
 
     if (self.isDaemonRunning) return YES;
 
-    if (![self launchDaemonProcess:error]) return NO;
+    NSString *plistPath = [self installedPlistPath];
+    int ret = [self spawnCommand:@"/bin/launchctl" arguments:@[@"load", @"-w", plistPath]];
+    if (ret != 0) {
+        /* 可能已加载过，尝试 unload 后重新 load */
+        [self spawnCommand:@"/bin/launchctl" arguments:@[@"unload", @"-w", plistPath]];
+        ret = [self spawnCommand:@"/bin/launchctl" arguments:@[@"load", @"-w", plistPath]];
+    }
 
-    /* 等待 0.5 秒确认服务端口已打开 */
-    for (int i = 0; i < 10; i++) {
+    if (ret != 0) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"TrollShot"
+                                         code:3003
+                                     userInfo:@{NSLocalizedDescriptionKey : @"launchctl load 失败，请检查 /Library/LaunchDaemons 是否可写"}];
+        }
+        return NO;
+    }
+
+    /* 等待 1 秒确认服务端口已打开 */
+    for (int i = 0; i < 20; i++) {
         if ([self isDaemonRunning]) return YES;
         [NSThread sleepForTimeInterval:0.05];
     }
@@ -240,7 +283,7 @@
     if (error) {
         *error = [NSError errorWithDomain:@"TrollShot"
                                      code:3002
-                                 userInfo:@{NSLocalizedDescriptionKey : @"trollshotd 已启动但端口未响应，请检查日志 /var/mobile/trollshot/trollshotd.log"}];
+                                 userInfo:@{NSLocalizedDescriptionKey : @"trollshotd 已加载但端口未响应，请检查日志 /var/mobile/trollshot/trollshotd.log"}];
     }
     return NO;
 }
@@ -256,11 +299,16 @@
     return kill(pid, 0) != 0;
 }
 
-/* 停止 daemon */
+/* 停止 daemon：unload launchd plist、杀掉进程、删除 plist，避免开机再次自启 */
 - (BOOL)stopDaemon:(NSError **)error {
-    /* 先尝试 launchctl unload，供已手动放置 plist 到 LaunchDaemons 的用户使用 */
-    [self spawnLaunchctlUnload];
+    NSString *plistPath = [self installedPlistPath];
 
+    if ([[NSFileManager defaultManager] fileExistsAtPath:plistPath]) {
+        [self spawnCommand:@"/bin/launchctl" arguments:@[@"unload", @"-w", plistPath]];
+        [[NSFileManager defaultManager] removeItemAtPath:plistPath error:nil];
+    }
+
+    /* 党底：结束保存的 PID 对应的进程 */
     pid_t pid = [self readSavedPid];
     if (pid > 0 && kill(pid, 0) == 0) {
         kill(pid, SIGTERM);
@@ -312,12 +360,12 @@
     }
 }
 
-/* 兜底结束 trollshotd 进程 */
+/* 党底结束 trollshotd 进程 */
 - (BOOL)killDaemonProcesses {
     return [self spawnCommand:@"/usr/bin/killall" arguments:@[@"-9", kDaemonName]] == 0;
 }
 
-/* 卸载 daemon */
+/* 卸载 daemon：停止服务并清理 plist 和二进制 */
 - (BOOL)uninstallDaemon:(NSError **)error {
     [self stopDaemon:nil];
     [[NSFileManager defaultManager] removeItemAtPath:[self installedDaemonPath] error:nil];

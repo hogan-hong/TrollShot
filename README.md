@@ -26,10 +26,17 @@ TrollShot 采用类似 TrollVNC 的后台 daemon 架构：
 - `TrollShot.app` — 用户界面，只负责"安装/启动/停止" daemon
 - `trollshotd` — 后台守护进程，真正跑 HTTP 截图服务
 
-点击"启动服务"后，`trollshotd` 会被复制到 `/var/mobile/trollshot/` 并以 `posix_spawn` 直接启动。
-由于 iOS 系统卷 `/usr/local/bin` 和 `/Library/LaunchDaemons` 为只读，TrollStore 应用无法写入，因此不依赖 `launchctl load`。
+点击"启动服务"后，`trollshotd` 会被复制到 `/var/mobile/trollshot/`，
+`com.hogan.trollshot.plist` 会被放入 `/Library/LaunchDaemons/`，
+并通过 `launchctl load -w` 加载。
+设置了 `RunAtLoad` 和 `KeepAlive`，设备重启后会自动启动截图服务。
 
-`com.hogan.trollshot.plist` 仍打包在 IPA 中，高级用户可手动将其放置到 `/Library/LaunchDaemons/` 开机自启（需越狱环境写入系统卷权限）。
+点击"停止服务"时会 `launchctl unload -w` 并删除 plist，
+避免重启后再次自启。
+卸载应用前请先点"停止服务"，否则残留的 plist 可能让进程在后台继续运行。
+
+需注意：写入 `/Library/LaunchDaemons/` 需要系统卷可写（越狱或持久化挂载），
+若 TrollStore 环境下写入失败，会提示用户检查系统卷是否可写。
 
 ## 构建要求
 
