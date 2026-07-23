@@ -1,74 +1,75 @@
 # TrollShot
 
-A minimal TrollStore-installable iOS app that exposes a single HTTP endpoint:
+一个极简的 TrollStore 安装应用，只提供一个 HTTP 接口：
 
 ```
-GET http://<device-ip>:8080/screenshot
+GET http://<设备IP>:8080/screenshot
 ```
 
-It returns the current device screen as a JPEG image.
+访问后返回当前设备屏幕的 JPEG 截图。
 
-TrollShot is derived from [TrollVNC](https://github.com/OwnGoalStudio/TrollVNC) and therefore licensed under the GNU General Public License v2.
+TrollShot 源于 [TrollVNC](https://github.com/OwnGoalStudio/TrollVNC)，因此使用 GNU General Public License v2 许可证。
 
-## How it works
+## 工作原理
 
-1. Uses private `CARenderServerRenderDisplay` to render the display into an `IOSurface`.
-2. Uses `IOSurfaceAccelerator` to transfer/convert the surface.
-3. Wraps the surface in a `CVPixelBuffer` and encodes it as JPEG via `CoreImage` / `ImageIO`.
-4. Serves the JPEG over a tiny HTTP server running inside the app.
+1. 通过私有 API `CARenderServerRenderDisplay` 将屏幕内容渲染到 `IOSurface`。
+2. 通过 `IOSurfaceAccelerator` 转换 surface 格式。
+3. 将 surface 零拷贝包装成 `CVPixelBuffer`，再用 `CoreImage` / `ImageIO` 编码为 JPEG。
+4. 通过应用内的迷你 HTTP 服务器返回 JPEG。
 
-No VNC protocol, no HID injection, no remote control.
+没有 VNC 协议，没有 HID 事件注入，没有远程控制。
 
-## Build requirements
+## 构建要求
 
-- macOS with Xcode Command Line Tools
-- [Theos](https://theos.dev/) installed (`$THEOS` set)
-- iOS SDK (e.g. iPhoneOS16.5)
-- `ldid` for ad-hoc signing
+- macOS 已安装 Xcode Command Line Tools
+- 已安装 [Theos](https://theos.dev/) 并设置好 `$THEOS`
+- iOS SDK（如 iPhoneOS16.5）
+- `ldid` 用于 ad-hoc 签名
 
-## Build
+## 本地构建
 
 ```sh
 cd TrollShot
 make clean package
 ```
 
-For a release build:
+发布版构建：
 
 ```sh
 make clean package FINALPACKAGE=1
 ```
 
-The output is a `.deb` under `packages/`. You can extract the `.app` from it and repack as a `.ipa` for TrollStore, or install via a bootstrap tool.
+输出为 `packages/` 目录下的 `.deb`。可以从中提取 `.app` 并重新打包成 `.ipa`，或通过越狱工具安装。
 
-## Repack as IPA for TrollStore
+## 重新打包为 TrollStore 可用的 IPA
 
 ```sh
-mkdir -p Payload
-cp -r packages/com.example.trollshot_*.deb_work/.theos/_ /
-# or extract the .app from the deb and place it in Payload/TrollShot.app
+mkdir -p extracted Payload
+dpkg-deb -R packages/com.example.trollshot_*.deb extracted
+APP_PATH=$(find extracted -name "*.app" -type d | head -n1)
+cp -R "$APP_PATH" Payload/
 zip -r TrollShot.ipa Payload
 ```
 
-Then install `TrollShot.ipa` with TrollStore.
+然后用 TrollStore 安装 `TrollShot.ipa`。
 
-## Usage
+## 使用方法
 
-1. Open the TrollShot app on the device.
-2. Note the URL shown on the black screen.
-3. From another device on the same network, open `http://<device-ip>:8080/screenshot`.
+1. 在设备上打开 TrollShot 应用。
+2. 记住黑屏上显示的 URL。
+3. 在同一局域网内的另一台设备上访问 `http://<设备IP>:8080/screenshot`。
 
-## Limitations
+## 局限
 
-- The app must remain in the foreground (or be allowed background execution) for the HTTP server to keep responding. iOS will suspend background apps after a short time.
-- For a persistent background service, you would need to split the capture server into a root daemon like TrollVNC does (`trollvncserver` + `trollvncmanager`).
-- Private entitlements are required; this will not work on stock, non-jailbroken devices. It is intended for TrollStore or jailbroken environments.
+- 应用必须保持前台（或允许后台运行），HTTP 服务器才能持续响应。iOS 会在短时间后挂起后台应用。
+- 如需持久后台服务，需要像 TrollVNC 那样把截图服务拆到一个 root daemon 中（`trollvncserver` + `trollvncmanager`）。
+- 需要私有 entitlement；普通非越狱/非 TrollStore 设备无法运行。
 
-## Files
+## 文件说明
 
-- `ScreenCapturer.{h,mm}` — screen capture via private APIs
-- `HTTPScreenshotServer.{h,mm}` — tiny HTTP server
-- `AppDelegate.{h,m}` / `main.m` — iOS app bootstrap
-- `include-spi/` — minimal private framework declarations
-- `TrollShot.entitlements` — required entitlements
-- `Makefile` — Theos build config
+- `ScreenCapturer.{h,mm}` — 通过私有 API 截屏
+- `HTTPScreenshotServer.{h,mm}` — 迷你 HTTP 服务器
+- `AppDelegate.{h,m}` / `main.m` — iOS 应用启动入口
+- `include-spi/` — 私有框架的最小声明
+- `TrollShot.entitlements` — 必需的 entitlement
+- `Makefile` — Theos 构建配置

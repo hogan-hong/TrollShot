@@ -24,13 +24,13 @@
     label.textAlignment = NSTextAlignmentCenter;
     label.numberOfLines = 0;
     label.font = [UIFont systemFontOfSize:18];
-    label.text = @"TrollShot is running\n\nhttp://<device-ip>:8080/screenshot";
+    label.text = @"TrollShot 运行中\n\nhttp://<本机IP>:8080/screenshot";
     [rootVC.view addSubview:label];
 
     self.window.rootViewController = rootVC;
     [self.window makeKeyAndVisible];
 
-    /* Start the screenshot HTTP server on a background thread. */
+    /* 在后台线程启动截图 HTTP 服务器 */
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         StartScreenshotServer(8080);
     });

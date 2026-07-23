@@ -1,12 +1,13 @@
 /*
- * Minimal IOSurface SPI declarations for TrollShot.
- * Derived from TrollVNC's IOSurfaceSPI.h and reverse-engineered signatures.
+ * TrollShot 最小化 IOSurface SPI 声明
+ * 基于 TrollVNC 的 IOSurfaceSPI.h 和逆向工程签名
  */
 
 #pragma once
 
 #include <IOSurface/IOSurfaceTypes.h>
 #include <CoreFoundation/CFBase.h>
+#include "IOKitSPI.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,9 +36,9 @@ size_t IOSurfaceGetWidth(IOSurfaceRef buffer);
 
 /* IOSurfaceAccelerator */
 extern const CFStringRef kIOSurfaceAcceleratorUseStraightAlpha;
-IOSurfaceAcceleratorRef IOSurfaceAcceleratorCreate(CFAllocatorRef allocator, CFDictionaryRef options, IOSurfaceAcceleratorRef *outAccelerator);
+IOSurfaceAcceleratorRef IOSurfaceAcceleratorCreate(CFAllocatorRef allocator, id options, IOSurfaceAcceleratorRef *outAccelerator);
 CFRunLoopSourceRef IOSurfaceAcceleratorGetRunLoopSource(IOSurfaceAcceleratorRef accelerator);
-int IOSurfaceAcceleratorTransferSurface(IOSurfaceAcceleratorRef accelerator, IOSurfaceRef source, IOSurfaceRef dest, CFDictionaryRef dict1, CFDictionaryRef dict2, CFDictionaryRef dict3, void **outInfo);
+IOReturn IOSurfaceAcceleratorTransferSurface(IOSurfaceAcceleratorRef accelerator, IOSurfaceRef source, IOSurfaceRef dest, CFDictionaryRef dict1, CFDictionaryRef dict2, CFDictionaryRef dict3, void **outInfo);
 
 #ifdef __cplusplus
 }

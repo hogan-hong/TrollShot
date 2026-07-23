@@ -19,7 +19,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (instancetype)new NS_UNAVAILABLE;
 - (instancetype)init NS_UNAVAILABLE;
 
-/** Capture the current screen and encode it as JPEG. Quality is 0..1. */
+/** 截取当前屏幕并编码为 JPEG。quality 范围为 0..1。 */
 - (nullable NSData *)captureJPEGWithQuality:(CGFloat)quality error:(NSError **)error;
 
 @end

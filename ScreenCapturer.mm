@@ -28,6 +28,7 @@ extern "C" {
 #endif
 
 CFIndex CARenderServerGetDirtyFrameCount(void *);
+/* 将主显示屏内容渲染到 IOSurface */
 void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef surface, int x, int y);
 
 #ifdef __cplusplus
@@ -57,7 +58,7 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
     int width = (int)round(screenSize.width);
     int height = (int)round(screenSize.height);
 
-    /* ARGB, 8 bits per component, 32 bits per pixel */
+    /* ARGB，每个通道 8 位，每像素 32 位 */
     unsigned pixelFormat = 0x42475241; // 'ARGB'
     int bytesPerComponent = sizeof(uint8_t);
     int bytesPerElement = bytesPerComponent * 4;
@@ -95,29 +96,29 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
         IOSurfaceAcceleratorCreate(kCFAllocatorDefault, nil, &accelerator);
     });
 
-    /* Render the main display into an IOSurface. */
+    /* 把主显示屏内容渲染进 IOSurface */
     CARenderServerRenderDisplay(0, CFSTR("LCD"), srcSurface, 0, 0);
 
-    /* Convert to sRGB-compatible surface. */
+    /* 转换成与 sRGB 兼容的 surface */
     IOReturn accelRet = IOSurfaceAcceleratorTransferSurface(accelerator, srcSurface, mScreenSurface, NULL, NULL, NULL, NULL);
     if (accelRet != kIOReturnSuccess) {
         if (error)
-            *error = [NSError errorWithDomain:@"TrollShot" code:1 userInfo:@{NSLocalizedDescriptionKey : @"IOSurface accelerator transfer failed"}];
+            *error = [NSError errorWithDomain:@"TrollShot" code:1 userInfo:@{NSLocalizedDescriptionKey : @"IOSurface 加速器转换失败"}];
         return nil;
     }
 
-    /* Wrap the IOSurface as a CVPixelBuffer (zero-copy). */
+    /* 将 IOSurface 零拷贝包装为 CVPixelBuffer */
     CVPixelBufferRef pixelBuffer = NULL;
     NSDictionary *attrs = @{(NSString *)kCVPixelBufferIOSurfacePropertiesKey : @{}};
     CVReturn cvret = CVPixelBufferCreateWithIOSurface(kCFAllocatorDefault, mScreenSurface,
                                                       (__bridge CFDictionaryRef)attrs, &pixelBuffer);
     if (cvret != kCVReturnSuccess || !pixelBuffer) {
         if (error)
-            *error = [NSError errorWithDomain:@"TrollShot" code:2 userInfo:@{NSLocalizedDescriptionKey : @"CVPixelBuffer creation failed"}];
+            *error = [NSError errorWithDomain:@"TrollShot" code:2 userInfo:@{NSLocalizedDescriptionKey : @"CVPixelBuffer 创建失败"}];
         return nil;
     }
 
-    /* Use CoreImage to normalize the ARGB buffer into a CGImage. */
+    /* 用 CoreImage 将 ARGB 缓冲区转为 CGImage */
     CIImage *ciImage = [CIImage imageWithCVPixelBuffer:pixelBuffer];
     CIContext *ciContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer : @NO}];
     CGImageRef cgImage = [ciContext createCGImage:ciImage fromRect:[ciImage extent]];
@@ -142,7 +143,7 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
     CVPixelBufferRelease(pixelBuffer);
 
     if (!jpegData && error) {
-        *error = [NSError errorWithDomain:@"TrollShot" code:3 userInfo:@{NSLocalizedDescriptionKey : @"JPEG encoding failed"}];
+        *error = [NSError errorWithDomain:@"TrollShot" code:3 userInfo:@{NSLocalizedDescriptionKey : @"JPEG 编码失败"}];
     }
     return jpegData;
 }

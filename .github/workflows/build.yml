@@ -1,4 +1,4 @@
-name: Build TrollShot IPA
+name: 构建 TrollShot IPA
 
 on:
   push:
@@ -15,39 +15,39 @@ jobs:
     runs-on: macos-14
 
     steps:
-      - name: Checkout repository
+      - name: 检出代码库
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: 安装依赖
         run: |
           brew install ldid-procursus p7zip make
 
-      - name: Checkout Theos
+      - name: 检出 Theos
         uses: actions/checkout@v4
         with:
           repository: theos/theos
           path: theos
           submodules: recursive
 
-      - name: Install iOS SDK
+      - name: 安装 iOS SDK
         run: |
           export THEOS=$GITHUB_WORKSPACE/theos
           cd theos
           ./bin/install-sdk iPhoneOS14.5
           ./bin/install-sdk iPhoneOS16.5
 
-      - name: Build package
+      - name: 构建应用
         run: |
           export THEOS=$GITHUB_WORKSPACE/theos
           make clean package
 
-      - name: Package IPA
+      - name: 打包 IPA
         run: |
           mkdir -p extracted Payload
           dpkg-deb -R packages/*.deb extracted
           APP_PATH=$(find extracted -name "*.app" -type d | head -n1)
           if [ -z "$APP_PATH" ]; then
-            echo "Failed to find .app bundle"
+            echo "未找到 .app 包"
             exit 1
           fi
           cp -R "$APP_PATH" Payload/
@@ -57,7 +57,7 @@ jobs:
           zip -r TrollShot.ipa Payload
           ls -lh TrollShot.ipa
 
-      - name: Upload IPA artifact
+      - name: 上传 IPA 构建产物
         uses: actions/upload-artifact@v4
         with:
           name: TrollShot-IPA

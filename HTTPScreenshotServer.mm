@@ -12,6 +12,7 @@
 
 #import <arpa/inet.h>
 #import <netinet/in.h>
+#import <string.h>
 #import <sys/socket.h>
 #import <unistd.h>
 
@@ -92,7 +93,7 @@ static void HandleClientConnection(int client) {
 void StartScreenshotServer(uint16_t port) {
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (serverSocket < 0) {
-        NSLog(@"[TrollShot] failed to create socket");
+        NSLog(@"[TrollShot] 创建 socket 失败");
         return;
     }
 
@@ -106,18 +107,18 @@ void StartScreenshotServer(uint16_t port) {
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     if (bind(serverSocket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        NSLog(@"[TrollShot] failed to bind port %d", port);
+        NSLog(@"[TrollShot] 端口 %d 绑定失败", port);
         close(serverSocket);
         return;
     }
 
     if (listen(serverSocket, 5) < 0) {
-        NSLog(@"[TrollShot] failed to listen");
+        NSLog(@"[TrollShot] 监听失败");
         close(serverSocket);
         return;
     }
 
-    NSLog(@"[TrollShot] HTTP server listening on port %d", port);
+    NSLog(@"[TrollShot] HTTP 服务器已在端口 %d 监听", port);
 
     while (1) {
         int client = accept(serverSocket, NULL, NULL);

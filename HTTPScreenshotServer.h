@@ -11,7 +11,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/** Start a simple HTTP server on the given port. Blocks the calling thread. */
+/** 在指定端口启动一个简单的 HTTP 服务器，调用线程会被阻塞。 */
 void StartScreenshotServer(uint16_t port);
 
 NS_ASSUME_NONNULL_END

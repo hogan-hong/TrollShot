@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Screen capture via CARenderServer / IOSurface -->
+	<!-- 通过 CARenderServer / IOSurface 截屏所需权限 -->
 	<key>com.apple.QuartzCore.displayable-context</key>
 	<true/>
 	<key>com.apple.QuartzCore.global-capture</key>
@@ -17,9 +17,7 @@
 	<true/>
 	<key>com.apple.backboard.client</key>
 	<true/>
-	<!-- Networking -->
-	<key>com.apple.developer.team-identifier</key>
-	<string>XXXXXXXXXX</string>
+	<!-- 网络 -->
 	<key>com.apple.private.security.no-container</key>
 	<true/>
 </dict>

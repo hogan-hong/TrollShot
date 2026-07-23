@@ -1,7 +1,7 @@
 /*
- * Minimal IOKit SPI shim for TrollShot.
+ * TrollShot 最小化 IOKit SPI 头文件
  */
 
 #pragma once
 
-#import <mach/mach.h>
+#import <IOKit/IOReturn.h>
