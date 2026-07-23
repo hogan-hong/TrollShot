@@ -131,34 +131,53 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
     /* 用 CoreImage 将 ARGB 缓冲区转为 CGImage */
     CIImage *ciImage = [CIImage imageWithCVPixelBuffer:pixelBuffer];
 
-    /* 根据当前设备方向旋转图片，使 JPEG 方向与肉眼看到的屏幕方向一致。
-     * 注意：截图原始数据是按物理像素渲染的，横屏时宽大于高，
-     * 但照片 EXIF 方向固定为 1（正常），所以需要主动旋转像素。
+    /* 方向校正：
+     * 1) 优先根据 UIDevice 方向判断横屏；
+     * 2) 如果设备方向不可靠（常见：游戏强制横屏但设备仍报告竖屏），
+     *    并且缓冲区高度大于宽度，说明横屏游戏画面被装在竖屏缓冲区内，
+     *    兜底顺时针旋转90度，使文字/画面恢复正常可读方向。
      */
+    size_t pWidth = CVPixelBufferGetWidth(pixelBuffer);
+    size_t pHeight = CVPixelBufferGetHeight(pixelBuffer);
     UIDeviceOrientation orientation = [UIDevice currentDevice].orientation;
-    CGImagePropertyOrientation cgOrientation = kCGImagePropertyOrientationUp;
+
+    BOOL rotateClockwise = NO;      // 顺时针 90°
+    BOOL rotateCounterClockwise = NO; // 逆时针 90°
+
     switch (orientation) {
-        case UIDeviceOrientationPortraitUpsideDown:
-            cgOrientation = kCGImagePropertyOrientationDown;
-            break;
         case UIDeviceOrientationLandscapeLeft:
-            cgOrientation = kCGImagePropertyOrientationRight;
+            rotateClockwise = YES;
             break;
         case UIDeviceOrientationLandscapeRight:
-            cgOrientation = kCGImagePropertyOrientationLeft;
+            rotateCounterClockwise = YES;
+            break;
+        case UIDeviceOrientationPortraitUpsideDown:
+            ciImage = [ciImage imageByApplyingTransform:CGAffineTransformMakeRotation(M_PI)];
             break;
         case UIDeviceOrientationPortrait:
         case UIDeviceOrientationFaceUp:
         case UIDeviceOrientationFaceDown:
         case UIDeviceOrientationUnknown:
         default:
-            cgOrientation = kCGImagePropertyOrientationUp;
+            if (pHeight > pWidth) {
+                /* 横屏游戏常见情况：竖屏缓冲区，画面逆时针歪了，顺时针转正 */
+                rotateClockwise = YES;
+            }
             break;
     }
-    CIImage *orientedImage = [ciImage imageByApplyingCGOrientation:cgOrientation];
+
+    if (rotateClockwise) {
+        /* 顺时针 90°，并平移使 extent 回到正坐标 */
+        CGAffineTransform t = CGAffineTransformMake(0, -1, 1, 0, 0, pWidth);
+        ciImage = [ciImage imageByApplyingTransform:t];
+    } else if (rotateCounterClockwise) {
+        /* 逆时针 90° */
+        CGAffineTransform t = CGAffineTransformMake(0, 1, -1, 0, pHeight, 0);
+        ciImage = [ciImage imageByApplyingTransform:t];
+    }
 
     CIContext *ciContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer : @NO}];
-    CGImageRef cgImage = [ciContext createCGImage:orientedImage fromRect:[orientedImage extent]];
+    CGImageRef cgImage = [ciContext createCGImage:ciImage fromRect:[ciImage extent]];
 
     NSData *jpegData = nil;
     if (cgImage) {
