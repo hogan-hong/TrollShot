@@ -8,7 +8,12 @@
 */
 
 #import "AppDelegate.h"
-#import "HTTPScreenshotServer.h"
+#import "TrollShotManager.h"
+
+@interface AppDelegate ()
+@property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, strong) UIButton *toggleButton;
+@end
 
 @implementation AppDelegate
 
@@ -18,24 +23,84 @@
     UIViewController *rootVC = [[UIViewController alloc] init];
     rootVC.view.backgroundColor = [UIColor blackColor];
 
-    UILabel *label = [[UILabel alloc] initWithFrame:rootVC.view.bounds];
-    label.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    label.textColor = [UIColor whiteColor];
-    label.textAlignment = NSTextAlignmentCenter;
-    label.numberOfLines = 0;
-    label.font = [UIFont systemFontOfSize:18];
-    label.text = @"TrollShot 运行中\n\nhttp://<本机IP>:8080/screenshot";
-    [rootVC.view addSubview:label];
+    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 80, rootVC.view.bounds.size.width - 40, 80)];
+    titleLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    titleLabel.textColor = [UIColor whiteColor];
+    titleLabel.textAlignment = NSTextAlignmentCenter;
+    titleLabel.numberOfLines = 0;
+    titleLabel.font = [UIFont boldSystemFontOfSize:20];
+    titleLabel.text = @"TrollShot\n屏幕截图服务";
+    [rootVC.view addSubview:titleLabel];
+
+    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 180, rootVC.view.bounds.size.width - 40, 80)];
+    self.statusLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    self.statusLabel.textColor = [UIColor whiteColor];
+    self.statusLabel.textAlignment = NSTextAlignmentCenter;
+    self.statusLabel.numberOfLines = 0;
+    self.statusLabel.font = [UIFont systemFontOfSize:16];
+    [rootVC.view addSubview:self.statusLabel];
+
+    self.toggleButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.toggleButton.frame = CGRectMake(40, 300, rootVC.view.bounds.size.width - 80, 50);
+    self.toggleButton.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [self.toggleButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    self.toggleButton.titleLabel.font = [UIFont boldSystemFontOfSize:18];
+    self.toggleButton.backgroundColor = [UIColor darkGrayColor];
+    self.toggleButton.layer.cornerRadius = 8;
+    [self.toggleButton addTarget:self action:@selector(toggleService:) forControlEvents:UIControlEventTouchUpInside];
+    [rootVC.view addSubview:self.toggleButton];
 
     self.window.rootViewController = rootVC;
     [self.window makeKeyAndVisible];
 
-    /* 在后台线程启动截图 HTTP 服务器 */
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        StartScreenshotServer(8080);
-    });
+    [self refreshUI];
+
+    /* 每 2 秒自动刷新状态 */
+    [NSTimer scheduledTimerWithTimeInterval:2.0
+                                     target:self
+                                   selector:@selector(refreshUI)
+                                   userInfo:nil
+                                    repeats:YES];
 
     return YES;
+}
+
+- (void)refreshUI {
+    TrollShotManager *mgr = [TrollShotManager sharedManager];
+    BOOL running = mgr.isDaemonRunning;
+
+    if (running) {
+        self.statusLabel.text = @"服务状态：运行中\n访问 http://<本机IP>:8080/screenshot";
+        [self.toggleButton setTitle:@"停止服务" forState:UIControlStateNormal];
+    } else {
+        self.statusLabel.text = @"服务状态：已停止\n点击下方按钮启动";
+        [self.toggleButton setTitle:@"启动服务" forState:UIControlStateNormal];
+    }
+}
+
+- (void)toggleService:(UIButton *)sender {
+    TrollShotManager *mgr = [TrollShotManager sharedManager];
+    NSError *error = nil;
+    BOOL ok = NO;
+
+    if (mgr.isDaemonRunning) {
+        ok = [mgr stopDaemon:&error];
+    } else {
+        ok = [mgr startDaemon:&error];
+    }
+
+    if (!ok) {
+        NSString *msg = error.localizedDescription ?: @"操作失败";
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"错误"
+                                                                       message:msg
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"确定"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:nil]];
+        [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
+    }
+
+    [self refreshUI];
 }
 
 @end

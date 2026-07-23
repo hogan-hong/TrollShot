@@ -1,7 +1,7 @@
 Package: com.hoganhong.trollshot
 Name: TrollShot
 Version: 1.0.0
-Architecture: iphoneos-arm
+Architecture: iphoneos-arm64
 Description: 极简 HTTP 截图服务器，仅适用于 TrollStore
 Maintainer: hogan-hong
 Author: hogan-hong

@@ -20,7 +20,7 @@ jobs:
 
       - name: 安装依赖
         run: |
-          brew install ldid-procursus p7zip make
+          brew install ldid-procursus p7zip make dpkg
 
       - name: 检出 Theos
         uses: actions/checkout@v4
@@ -37,6 +37,7 @@ jobs:
           cp -R /tmp/theos-sdks/iPhoneOS16.5.sdk $THEOS/sdks/
           cp -R /tmp/theos-sdks/iPhoneOS14.5.sdk $THEOS/sdks/
           ls -la $THEOS/sdks/
+
       - name: 构建应用
         run: |
           export THEOS=$GITHUB_WORKSPACE/theos
@@ -54,30 +55,78 @@ jobs:
         if: success()
         run: |
           echo "=== 查找 .deb 包 ==="
-          ls -la packages/ || true
           find . -name "*.deb" -type f
+          DEB=$(find . -name "*.deb" -type f | head -n1)
+          if [ -z "$DEB" ]; then
+            echo "未找到 .deb 包，列出项目目录结构："
+            find . -maxdepth 3 -type d | sort
+            exit 1
+          fi
+          echo "DEB=$DEB"
+
+          echo "=== .deb 内容清单 ==="
+          dpkg-deb -c "$DEB" | sort
+
           echo "=== 解包 .deb ==="
           mkdir -p extracted Payload
-          DEB=$(find packages -name "*.deb" -type f | head -n1)
-          echo "DEB=$DEB"
           dpkg-deb -R "$DEB" extracted
+
           echo "=== 解包后目录结构 ==="
-          find extracted -maxdepth 4 -type d
-          APP_PATH=$(find extracted -name "*.app" -type d | head -n1)
+          find extracted -maxdepth 6 -type d | sort
+
+          APP_PATH=$(find extracted -name "*.app" -maxdepth 4 -type d | head -n1)
           if [ -z "$APP_PATH" ]; then
             echo "未找到 .app 包"
             exit 1
           fi
           echo "APP_PATH=$APP_PATH"
+
+          echo "=== .app 包内容 ==="
+          ls -la "$APP_PATH/"
+
           cp -R "$APP_PATH" Payload/
-          cd Payload
+          APP_NAME=$(basename "$APP_PATH")
+          echo "APP_NAME=$APP_NAME"
+
+          echo "=== Payload 内容 ==="
+          ls -la Payload/
+          ls -la "Payload/$APP_NAME/"
+
+          # 确保 Info.plist 存在，若 Theos 未复制则从项目根补充
+          if [ ! -f "Payload/$APP_NAME/Info.plist" ]; then
+            echo "Info.plist 不在 .app 中，从项目根复制"
+            cp Info.plist "Payload/$APP_NAME/Info.plist"
+          fi
+
+          # 确保可执行文件存在且有执行权限
+          EXEC_NAME=$(/usr/libexec/PlistBuddy -c "Print CFBundleExecutable" "Payload/$APP_NAME/Info.plist" 2>/dev/null || echo "TrollShot")
+          echo "EXEC_NAME=$EXEC_NAME"
+          if [ ! -f "Payload/$APP_NAME/$EXEC_NAME" ]; then
+            echo "警告：未找到可执行文件 Payload/$APP_NAME/$EXEC_NAME"
+          else
+            chmod +x "Payload/$APP_NAME/$EXEC_NAME"
+          fi
+
+          # 确保 trollshotd 可执行文件和 launchd plist 在 .app 中
+          if [ ! -f "Payload/$APP_NAME/trollshotd" ]; then
+            echo "错误：未找到 Payload/$APP_NAME/trollshotd"
+            exit 1
+          fi
+          if [ ! -f "Payload/$APP_NAME/com.hogan.trollshot.plist" ]; then
+            echo "错误：未找到 Payload/$APP_NAME/com.hogan.trollshot.plist"
+            exit 1
+          fi
+          chmod +x "Payload/$APP_NAME/trollshotd"
+
           find . -name ".DS_Store" -delete
-          cd ..
           zip -r TrollShot.ipa Payload
           ls -lh TrollShot.ipa
 
+          echo "=== IPA 内容 ==="
+          unzip -l TrollShot.ipa
+
       - name: 上传打包调试信息
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: package-debug

@@ -9,6 +9,7 @@
 
 #import "HTTPScreenshotServer.h"
 #import "ScreenCapturer.h"
+#import "TSLogger.h"
 
 #import <arpa/inet.h>
 #import <netinet/in.h>
@@ -25,6 +26,9 @@ static NSData *CaptureJPEGOnMainThread(void) {
         dispatch_sync(dispatch_get_main_queue(), ^{
             data = [[ScreenCapturer sharedCapturer] captureJPEGWithQuality:0.85 error:&error];
         });
+    }
+    if (error) {
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"截图失败: %@", error.localizedDescription]];
     }
     return data;
 }
@@ -70,13 +74,17 @@ static void HandleClientConnection(int client) {
         }
         buf[n] = '\0';
 
+        [[TSLogger sharedLogger] log:@"收到 HTTP 请求"];
+
         if (strncmp(buf, "GET /screenshot", 15) != 0) {
             NSData *empty = [NSData data];
             SendResponse(client, 404, nil, empty);
             close(client);
+            [[TSLogger sharedLogger] log:@"请求路径不匹配，返回 404"];
             return;
         }
 
+        [[TSLogger sharedLogger] log:@"开始截图..."];
         NSData *jpeg = CaptureJPEGOnMainThread();
         if (!jpeg) {
             NSData *empty = [NSData data];
@@ -85,15 +93,18 @@ static void HandleClientConnection(int client) {
             return;
         }
 
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"截图成功，大小 %lu 字节", (unsigned long)jpeg.length]];
         SendResponse(client, 200, @"image/jpeg", jpeg);
         close(client);
     }
 }
 
 extern "C" void StartScreenshotServer(uint16_t port) {
+    [[TSLogger sharedLogger] log:@"HTTP 服务线程启动"];
+
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (serverSocket < 0) {
-        NSLog(@"[TrollShot] 创建 socket 失败");
+        [[TSLogger sharedLogger] log:@"创建 socket 失败"];
         return;
     }
 
@@ -107,18 +118,18 @@ extern "C" void StartScreenshotServer(uint16_t port) {
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     if (bind(serverSocket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        NSLog(@"[TrollShot] 端口 %d 绑定失败", port);
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"端口 %d 绑定失败", port]];
         close(serverSocket);
         return;
     }
 
     if (listen(serverSocket, 5) < 0) {
-        NSLog(@"[TrollShot] 监听失败");
+        [[TSLogger sharedLogger] log:@"监听失败"];
         close(serverSocket);
         return;
     }
 
-    NSLog(@"[TrollShot] HTTP 服务器已在端口 %d 监听", port);
+    [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"HTTP 服务器已在端口 %d 监听", port]];
 
     while (1) {
         int client = accept(serverSocket, NULL, NULL);

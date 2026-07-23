@@ -37,6 +37,8 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
 @implementation ScreenCapturer {
     NSDictionary *mRenderProperties;
     IOSurfaceRef mScreenSurface;
+    IOSurfaceRef mSrcSurface;
+    IOSurfaceAcceleratorRef mAccelerator;
 }
 
 + (instancetype)sharedCapturer {
@@ -78,6 +80,17 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
     };
 
     mScreenSurface = IOSurfaceCreate((__bridge CFDictionaryRef)mRenderProperties);
+
+    /* 创建源 surface 和加速器；在主线程初始化并将加速器 run loop source 挂到主 run loop */
+    mSrcSurface = IOSurfaceCreate((__bridge CFDictionaryRef)mRenderProperties);
+    IOReturn accelCreateRet = IOSurfaceAcceleratorCreate(kCFAllocatorDefault, NULL, &mAccelerator);
+    if (accelCreateRet == kIOReturnSuccess && mAccelerator) {
+        CFRunLoopSourceRef runLoopSource = IOSurfaceAcceleratorGetRunLoopSource(mAccelerator);
+        if (runLoopSource) {
+            CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, kCFRunLoopDefaultMode);
+        }
+    }
+
     return self;
 }
 
@@ -87,19 +100,17 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
     if (quality > 1.0)
         quality = 1.0;
 
-    static IOSurfaceRef srcSurface = NULL;
-    static IOSurfaceAcceleratorRef accelerator = NULL;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        srcSurface = IOSurfaceCreate((__bridge CFDictionaryRef)mRenderProperties);
-        IOSurfaceAcceleratorCreate(kCFAllocatorDefault, nil, &accelerator);
-    });
+    if (!mSrcSurface || !mAccelerator) {
+        if (error)
+            *error = [NSError errorWithDomain:@"TrollShot" code:4 userInfo:@{NSLocalizedDescriptionKey : @"IOSurface 加速器未初始化"}];
+        return nil;
+    }
 
     /* 把主显示屏内容渲染进 IOSurface */
-    CARenderServerRenderDisplay(0, CFSTR("LCD"), srcSurface, 0, 0);
+    CARenderServerRenderDisplay(0, CFSTR("LCD"), mSrcSurface, 0, 0);
 
     /* 转换成与 sRGB 兼容的 surface */
-    IOReturn accelRet = IOSurfaceAcceleratorTransferSurface(accelerator, srcSurface, mScreenSurface, NULL, NULL, NULL, NULL);
+    IOReturn accelRet = IOSurfaceAcceleratorTransferSurface(mAccelerator, mSrcSurface, mScreenSurface, NULL, NULL, NULL, NULL);
     if (accelRet != kIOReturnSuccess) {
         if (error)
             *error = [NSError errorWithDomain:@"TrollShot" code:1 userInfo:@{NSLocalizedDescriptionKey : @"IOSurface 加速器转换失败"}];

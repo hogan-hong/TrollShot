@@ -2,7 +2,17 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- 通过 CARenderServer / IOSurface 截屏所需权限 -->
+	<!-- TrollStore / 越狱环境运行必需：退出沙盒 -->
+	<key>com.apple.private.security.no-sandbox</key>
+	<true/>
+	<key>com.apple.private.security.no-container</key>
+	<true/>
+	<key>platform-application</key>
+	<true/>
+	<key>get-task-allow</key>
+	<true/>
+
+	<!-- CARenderServer / IOSurface 截屏所需权限 -->
 	<key>com.apple.QuartzCore.displayable-context</key>
 	<true/>
 	<key>com.apple.QuartzCore.global-capture</key>
@@ -17,8 +27,18 @@
 	<true/>
 	<key>com.apple.backboard.client</key>
 	<true/>
-	<!-- 网络 -->
-	<key>com.apple.private.security.no-container</key>
-	<true/>
+
+	<!-- IOKit 用户端访问 IOSurface 加速器必需 -->
+	<key>com.apple.security.iokit-user-client-class</key>
+	<array>
+		<string>IOSurfaceAcceleratorClient</string>
+		<string>IOSurfaceRootUserClient</string>
+		<string>IOMobileFramebufferUserClient</string>
+		<string>IOAccelContext</string>
+		<string>IOAccelDevice</string>
+		<string>IOAccelSharedUserClient</string>
+		<string>IOAccelSubmitter2</string>
+		<string>IOGPUDeviceUserClient</string>
+	</array>
 </dict>
 </plist>
