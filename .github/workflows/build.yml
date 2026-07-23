@@ -44,6 +44,12 @@ jobs:
           export THEOS=$GITHUB_WORKSPACE/theos
           make clean package 2>&1 | tee build.log
 
+          echo "=== 检查 staging .app 中的 daemon 和 plist ==="
+          ls -la .theos/_/Applications/TrollShot.app/ || true
+
+          echo "=== 检查 .deb 中的 daemon 和 plist ==="
+          dpkg-deb -c packages/com.example.trollshot_*.deb | grep -E "trollshotd|\.plist" || true
+
       - name: 上传构建日志
         if: always()
         uses: actions/upload-artifact@v4

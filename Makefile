@@ -20,3 +20,17 @@ trollshotd_CODESIGN_FLAGS = -STrollShot.entitlements
 
 include $(THEOS_MAKE_PATH)/application.mk
 include $(THEOS_MAKE_PATH)/tool.mk
+
+# 打包前把 daemon 二进制和 launchd plist 复制进 .app bundle，
+# 这样 TrollShotManager 才能从 [NSBundle mainBundle] 里找到它们。
+before-package::
+	@mkdir -p "$(THEOS_STAGING_DIR)/Applications/TrollShot.app"
+	@if [ -f "$(THEOS_OBJ_DIR)/trollshotd" ]; then \
+		cp -p "$(THEOS_OBJ_DIR)/trollshotd" "$(THEOS_STAGING_DIR)/Applications/TrollShot.app/trollshotd"; \
+	elif [ -f "$(THEOS_OBJ_DIR)/debug/trollshotd" ]; then \
+		cp -p "$(THEOS_OBJ_DIR)/debug/trollshotd" "$(THEOS_STAGING_DIR)/Applications/TrollShot.app/trollshotd"; \
+	elif [ -f ".theos/obj/trollshotd" ]; then \
+		cp -p ".theos/obj/trollshotd" "$(THEOS_STAGING_DIR)/Applications/TrollShot.app/trollshotd"; \
+	fi
+	@chmod +x "$(THEOS_STAGING_DIR)/Applications/TrollShot.app/trollshotd"
+	@cp -p "layout/Library/LaunchDaemons/com.hogan.trollshot.plist" "$(THEOS_STAGING_DIR)/Applications/TrollShot.app/com.hogan.trollshot.plist"
