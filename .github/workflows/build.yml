@@ -108,6 +108,22 @@ jobs:
           fi
 
           # 确保 trollshotd 可执行文件和 launchd plist 在 .app 中
+          # 如果 before-package 未复制，则从 .deb 解包后的 staging 目录补充
+          if [ ! -f "Payload/$APP_NAME/trollshotd" ]; then
+            STAGED_BIN=$(find extracted -name "trollshotd" -type f | head -n1)
+            if [ -n "$STAGED_BIN" ]; then
+              echo "从 $STAGED_BIN 复制 trollshotd"
+              cp -p "$STAGED_BIN" "Payload/$APP_NAME/trollshotd"
+            fi
+          fi
+          if [ ! -f "Payload/$APP_NAME/com.hogan.trollshot.plist" ]; then
+            STAGED_PLIST=$(find extracted -name "com.hogan.trollshot.plist" -type f | head -n1)
+            if [ -n "$STAGED_PLIST" ]; then
+              echo "从 $STAGED_PLIST 复制 plist"
+              cp -p "$STAGED_PLIST" "Payload/$APP_NAME/com.hogan.trollshot.plist"
+            fi
+          fi
+
           if [ ! -f "Payload/$APP_NAME/trollshotd" ]; then
             echo "错误：未找到 Payload/$APP_NAME/trollshotd"
             exit 1
