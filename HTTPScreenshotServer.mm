@@ -18,6 +18,9 @@
 #import <sys/socket.h>
 #import <unistd.h>
 
+/* HandleClientConnection 在下方定义，线程入口需要前向声明 */
+static void HandleClientConnection(int client);
+
 /* 客户端连接参数 */
 struct ClientContext {
     int clientSocket;
