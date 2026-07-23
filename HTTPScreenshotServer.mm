@@ -90,7 +90,7 @@ static void HandleClientConnection(int client) {
     }
 }
 
-void StartScreenshotServer(uint16_t port) {
+extern "C" void StartScreenshotServer(uint16_t port) {
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (serverSocket < 0) {
         NSLog(@"[TrollShot] 创建 socket 失败");

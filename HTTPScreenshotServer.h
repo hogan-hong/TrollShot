@@ -11,7 +11,15 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** 在指定端口启动一个简单的 HTTP 服务器，调用线程会被阻塞。 */
 void StartScreenshotServer(uint16_t port);
+
+#ifdef __cplusplus
+}
+#endif
 
 NS_ASSUME_NONNULL_END

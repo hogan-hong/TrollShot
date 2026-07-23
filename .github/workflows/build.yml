@@ -32,30 +32,57 @@ jobs:
       - name: 安装 iOS SDK
         run: |
           export THEOS=$GITHUB_WORKSPACE/theos
-          cd theos
-          ./bin/install-sdk iPhoneOS14.5
-          ./bin/install-sdk iPhoneOS16.5
-
+          mkdir -p $THEOS/sdks
+          git clone --depth=1 https://github.com/theos/sdks.git /tmp/theos-sdks
+          cp -R /tmp/theos-sdks/iPhoneOS16.5.sdk $THEOS/sdks/
+          cp -R /tmp/theos-sdks/iPhoneOS14.5.sdk $THEOS/sdks/
+          ls -la $THEOS/sdks/
       - name: 构建应用
         run: |
           export THEOS=$GITHUB_WORKSPACE/theos
-          make clean package
+          make clean package 2>&1 | tee build.log
+
+      - name: 上传构建日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
 
       - name: 打包 IPA
+        if: success()
         run: |
+          echo "=== 查找 .deb 包 ==="
+          ls -la packages/ || true
+          find . -name "*.deb" -type f
+          echo "=== 解包 .deb ==="
           mkdir -p extracted Payload
-          dpkg-deb -R packages/*.deb extracted
+          DEB=$(find packages -name "*.deb" -type f | head -n1)
+          echo "DEB=$DEB"
+          dpkg-deb -R "$DEB" extracted
+          echo "=== 解包后目录结构 ==="
+          find extracted -maxdepth 4 -type d
           APP_PATH=$(find extracted -name "*.app" -type d | head -n1)
           if [ -z "$APP_PATH" ]; then
             echo "未找到 .app 包"
             exit 1
           fi
+          echo "APP_PATH=$APP_PATH"
           cp -R "$APP_PATH" Payload/
           cd Payload
           find . -name ".DS_Store" -delete
           cd ..
           zip -r TrollShot.ipa Payload
           ls -lh TrollShot.ipa
+
+      - name: 上传打包调试信息
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-debug
+          path: extracted
+          if-no-files-found: ignore
 
       - name: 上传 IPA 构建产物
         uses: actions/upload-artifact@v4

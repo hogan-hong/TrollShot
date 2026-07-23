@@ -20,7 +20,6 @@
 #import <CoreVideo/CoreVideo.h>
 #import <CoreImage/CoreImage.h>
 #import <ImageIO/ImageIO.h>
-#import <MobileCoreServices/MobileCoreServices.h>
 #import <UIKit/UIKit.h>
 
 #ifdef __cplusplus
@@ -126,7 +125,8 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
     NSData *jpegData = nil;
     if (cgImage) {
         NSMutableData *data = [NSMutableData data];
-        CGImageDestinationRef dest = CGImageDestinationCreateWithData((__bridge CFMutableDataRef)data, kUTTypeJPEG, 1, NULL);
+        /* 用 Uniform Type Identifier public.jpeg 作为图像格式 */
+        CGImageDestinationRef dest = CGImageDestinationCreateWithData((__bridge CFMutableDataRef)data, CFSTR("public.jpeg"), 1, NULL);
         if (dest) {
             NSDictionary *props = @{
                 (__bridge NSString *)kCGImageDestinationLossyCompressionQuality : @(quality),
