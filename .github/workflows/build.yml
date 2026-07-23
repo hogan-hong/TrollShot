@@ -48,7 +48,19 @@ jobs:
           ls -la .theos/_/Applications/TrollShot.app/ || true
 
           echo "=== 检查 .deb 中的关键文件 ==="
-          dpkg-deb -c packages/com.example.trollshot_*.deb | grep -E "trollshotd|\.plist|postinst|prerm" || true
+          dpkg-deb -c packages/com.example.trollshot_*.deb | grep -E "trollshotd|\.plist" || true
+
+      - name: 打包 IPA
+        run: |
+          set -e
+          # 从 staging 目录拿出 .app，按 TrollStore 标准打包成 Payload/*.app
+          mkdir -p Payload
+          cp -R .theos/_/Applications/TrollShot.app Payload/
+          # TrollStore 安装时需要可执行权限
+          chmod -R +x Payload/TrollShot.app
+          zip -yqr TrollShot.ipa Payload
+          rm -rf Payload
+          ls -lh TrollShot.ipa
 
       - name: 上传构建日志
         if: always()
@@ -58,12 +70,12 @@ jobs:
           path: build.log
           if-no-files-found: ignore
 
-      - name: 上传 .deb 构建产物
+      - name: 上传 IPA 构建产物
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: TrollShot-deb
-          path: packages/*.deb
+          name: TrollShot-ipa
+          path: TrollShot.ipa
           if-no-files-found: error
 
       - name: 上传解包调试信息

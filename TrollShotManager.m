@@ -24,7 +24,7 @@
 
 #define kDaemonName        @"trollshotd"
 #define kLaunchdPlistName  @"com.hogan.trollshot.plist"
-#define kDaemonDestDir     @"/usr/bin"
+#define kDaemonDestDir     @"/var/mobile/trollshot"
 #define kLogDir            @"/var/mobile/trollshot"
 #define kListenPort        8080
 
@@ -52,14 +52,14 @@
     return [[self bundlePath] stringByAppendingPathComponent:kLaunchdPlistName];
 }
 
-/* daemon 目标路径（postinst 安装到 /usr/bin） */
+/* daemon 目标路径 */
 - (NSString *)installedDaemonPath {
     return [kDaemonDestDir stringByAppendingPathComponent:kDaemonName];
 }
 
-/* launchd plist 目标路径 */
+/* launchd plist 目标路径（保留，供高级用户使用） */
 - (NSString *)installedPlistPath {
-    return [@"/Library/LaunchDaemons" stringByAppendingPathComponent:kLaunchdPlistName];
+    return [kDaemonDestDir stringByAppendingPathComponent:kLaunchdPlistName];
 }
 
 /* PID 文件路径 */
@@ -105,13 +105,10 @@
     return YES;
 }
 
-/* 判断 daemon 是否已通过 postinst 安装到系统目录 */
+/* 判断 daemon 是否已安装 */
 - (BOOL)isDaemonInstalled {
-    NSFileManager *fm = [NSFileManager defaultManager];
     BOOL isDir = NO;
-    BOOL hasBin = [fm fileExistsAtPath:[self installedDaemonPath] isDirectory:&isDir] && !isDir;
-    BOOL hasPlist = [fm fileExistsAtPath:[self installedPlistPath]];
-    return hasBin && hasPlist;
+    return [[NSFileManager defaultManager] fileExistsAtPath:[self installedDaemonPath] isDirectory:&isDir] && !isDir;
 }
 
 /* 通过连接本地端口判断服务是否正在运行 */
@@ -137,39 +134,105 @@
     return NO;
 }
 
-/* 启动 daemon：依赖 postinst 已将二进制和 plist 安装到系统目录 */
-- (BOOL)startDaemon:(NSError **)error {
-    if (!self.isDaemonInstalled) {
+/* 安装 daemon 到 /var/mobile/trollshot */
+- (BOOL)installDaemon:(NSError **)error {
+    NSString *srcBin = [self bundledDaemonPath];
+
+    if (![[NSFileManager defaultManager] fileExistsAtPath:srcBin]) {
         if (error) {
             *error = [NSError errorWithDomain:@"TrollShot"
                                          code:2001
-                                     userInfo:@{NSLocalizedDescriptionKey : @"未找到系统级安装。\n\nTrollShot 需要通过 .deb 包安装才能开机自启。请卸载当前 IPA，通过 TrollStore 安装最新 .deb 包。"}];
+                                     userInfo:@{NSLocalizedDescriptionKey : @"应用内未找到 trollshotd，请重新安装 IPA"}];
         }
         return NO;
     }
 
-    if (self.isDaemonRunning) return YES;
+    if (![self ensureDirectory:kLogDir error:error]) return NO;
+    if (![self ensureDirectory:kDaemonDestDir error:error]) return NO;
 
-    NSString *plistPath = [self installedPlistPath];
-
-    /* 先尝试 launchctl load -w */
-    int ret = [self spawnCommand:@"/bin/launchctl" arguments:@[@"load", @"-w", plistPath]];
-    if (ret != 0) {
-        /* 可能已加载，尝试启动 */
-        ret = [self spawnCommand:@"/bin/launchctl" arguments:@[@"start", @"com.hogan.trollshot"]];
+    NSError *copyErr = nil;
+    [[NSFileManager defaultManager] removeItemAtPath:[self installedDaemonPath] error:nil];
+    if (![[NSFileManager defaultManager] copyItemAtPath:srcBin
+                                                 toPath:[self installedDaemonPath]
+                                                  error:&copyErr]) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"TrollShot"
+                                         code:2003
+                                     userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"复制 trollshotd 失败: %@\n源: %@\n目标: %@", copyErr.localizedDescription, srcBin, [self installedDaemonPath]]}];
+        }
+        return NO;
     }
+
+    chmod([[self installedDaemonPath] fileSystemRepresentation], 0755);
+    return YES;
+}
+
+/* 直接启动 daemon 进程 */
+- (BOOL)launchDaemonProcess:(NSError **)error {
+    NSString *daemonPath = [self installedDaemonPath];
+    const char *cPath = [daemonPath fileSystemRepresentation];
+    NSArray<NSString *> *args = @[@"--port", @"8080"];
+    int argc = (int)args.count + 1;
+    char **argv = (char **)calloc(argc + 1, sizeof(char *));
+    argv[0] = strdup(cPath);
+    for (int i = 0; i < (int)args.count; i++) {
+        argv[i + 1] = strdup([args[i] fileSystemRepresentation]);
+    }
+    argv[argc] = NULL;
+
+    /* 重定向 stdout/stderr 到日志文件 */
+    NSString *logPath = [kLogDir stringByAppendingPathComponent:@"trollshotd.log"];
+    int logFd = open([logPath fileSystemRepresentation], O_WRONLY | O_CREAT | O_APPEND, 0644);
+
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    if (logFd >= 0) {
+        posix_spawn_file_actions_adddup2(&actions, logFd, STDOUT_FILENO);
+        posix_spawn_file_actions_adddup2(&actions, logFd, STDERR_FILENO);
+        posix_spawn_file_actions_addclose(&actions, logFd);
+    }
+
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
+
+    pid_t pid = 0;
+    int ret = posix_spawn(&pid, cPath, logFd >= 0 ? &actions : NULL, &attr, argv, NULL);
+
+    posix_spawnattr_destroy(&attr);
+    posix_spawn_file_actions_destroy(&actions);
+    if (logFd >= 0) close(logFd);
+
+    for (int i = 0; i <= argc; i++) {
+        if (argv[i]) free(argv[i]);
+    }
+    free(argv);
 
     if (ret != 0) {
         if (error) {
             *error = [NSError errorWithDomain:@"TrollShot"
                                          code:3001
-                                     userInfo:@{NSLocalizedDescriptionKey : @"启动服务失败，请检查日志 /var/mobile/trollshot/trollshotd.log"}];
+                                     userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"启动 trollshotd 失败: %s", strerror(ret)]}];
         }
         return NO;
     }
 
-    /* 等待 1 秒确认服务端口已打开 */
-    for (int i = 0; i < 20; i++) {
+    [self savePid:pid];
+    return YES;
+}
+
+/* 启动 daemon */
+- (BOOL)startDaemon:(NSError **)error {
+    if (!self.isDaemonInstalled) {
+        if (![self installDaemon:error]) return NO;
+    }
+
+    if (self.isDaemonRunning) return YES;
+
+    if (![self launchDaemonProcess:error]) return NO;
+
+    /* 等待 0.5 秒确认服务端口已打开 */
+    for (int i = 0; i < 10; i++) {
         if ([self isDaemonRunning]) return YES;
         [NSThread sleepForTimeInterval:0.05];
     }
@@ -177,7 +240,7 @@
     if (error) {
         *error = [NSError errorWithDomain:@"TrollShot"
                                      code:3002
-                                 userInfo:@{NSLocalizedDescriptionKey : @"服务已加载但端口未响应，请检查日志 /var/mobile/trollshot/trollshotd.log"}];
+                                 userInfo:@{NSLocalizedDescriptionKey : @"trollshotd 已启动但端口未响应，请检查日志 /var/mobile/trollshot/trollshotd.log"}];
     }
     return NO;
 }
@@ -195,10 +258,8 @@
 
 /* 停止 daemon */
 - (BOOL)stopDaemon:(NSError **)error {
-    NSString *plistPath = [self installedPlistPath];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:plistPath]) {
-        [self spawnCommand:@"/bin/launchctl" arguments:@[@"unload", @"-w", plistPath]];
-    }
+    /* 先尝试 launchctl unload，供已手动放置 plist 到 LaunchDaemons 的用户使用 */
+    [self spawnLaunchctlUnload];
 
     pid_t pid = [self readSavedPid];
     if (pid > 0 && kill(pid, 0) == 0) {
@@ -209,7 +270,7 @@
         }
     }
 
-    /* 兜底：结束所有 trollshotd 进程 */
+    /* 党底：查找并结束所有 trollshotd 进程 */
     [self killDaemonProcesses];
 
     [[NSFileManager defaultManager] removeItemAtPath:[self pidFilePath] error:nil];
@@ -243,9 +304,25 @@
     return -1;
 }
 
+/* 尝试 launchctl unload */
+- (void)spawnLaunchctlUnload {
+    NSString *plistPath = [self installedPlistPath];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:plistPath]) {
+        [self spawnCommand:@"/bin/launchctl" arguments:@[@"unload", @"-w", plistPath]];
+    }
+}
+
 /* 兜底结束 trollshotd 进程 */
 - (BOOL)killDaemonProcesses {
     return [self spawnCommand:@"/usr/bin/killall" arguments:@[@"-9", kDaemonName]] == 0;
+}
+
+/* 卸载 daemon */
+- (BOOL)uninstallDaemon:(NSError **)error {
+    [self stopDaemon:nil];
+    [[NSFileManager defaultManager] removeItemAtPath:[self installedDaemonPath] error:nil];
+    [[NSFileManager defaultManager] removeItemAtPath:[self installedPlistPath] error:nil];
+    return YES;
 }
 
 @end

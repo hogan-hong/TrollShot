@@ -87,7 +87,7 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
     if (accelCreateRet == kIOReturnSuccess && mAccelerator) {
         CFRunLoopSourceRef runLoopSource = IOSurfaceAcceleratorGetRunLoopSource(mAccelerator);
         if (runLoopSource) {
-            CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, kCFRunLoopDefaultMode);
+            CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, kCFRunLoopCommonModes);
         }
     }
 
@@ -130,8 +130,35 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
 
     /* 用 CoreImage 将 ARGB 缓冲区转为 CGImage */
     CIImage *ciImage = [CIImage imageWithCVPixelBuffer:pixelBuffer];
+
+    /* 根据当前设备方向旋转图片，使 JPEG 方向与肉眼看到的屏幕方向一致。
+     * 注意：截图原始数据是按物理像素渲染的，横屏时宽大于高，
+     * 但照片 EXIF 方向固定为 1（正常），所以需要主动旋转像素。
+     */
+    UIDeviceOrientation orientation = [UIDevice currentDevice].orientation;
+    CGImagePropertyOrientation cgOrientation = kCGImagePropertyOrientationUp;
+    switch (orientation) {
+        case UIDeviceOrientationPortraitUpsideDown:
+            cgOrientation = kCGImagePropertyOrientationDown;
+            break;
+        case UIDeviceOrientationLandscapeLeft:
+            cgOrientation = kCGImagePropertyOrientationRight;
+            break;
+        case UIDeviceOrientationLandscapeRight:
+            cgOrientation = kCGImagePropertyOrientationLeft;
+            break;
+        case UIDeviceOrientationPortrait:
+        case UIDeviceOrientationFaceUp:
+        case UIDeviceOrientationFaceDown:
+        case UIDeviceOrientationUnknown:
+        default:
+            cgOrientation = kCGImagePropertyOrientationUp;
+            break;
+    }
+    CIImage *orientedImage = [ciImage imageByApplyingCGOrientation:cgOrientation];
+
     CIContext *ciContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer : @NO}];
-    CGImageRef cgImage = [ciContext createCGImage:ciImage fromRect:[ciImage extent]];
+    CGImageRef cgImage = [ciContext createCGImage:orientedImage fromRect:[orientedImage extent]];
 
     NSData *jpegData = nil;
     if (cgImage) {

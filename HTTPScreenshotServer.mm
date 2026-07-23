@@ -45,16 +45,16 @@ static void *HandleClientThread(void *arg) {
     }
 }
 
-static NSData *CaptureJPEGOnMainThread(void) {
+/* 
+ * 直接在当前 pthread 线程截图，不使用 dispatch_sync(dispatch_get_main_queue())。
+ * 在 daemon 进程中 GCD 主队列可能与主线程 RunLoop 关联异常，
+ * 导致 HTTP 请求一直等待而转圈。ScreenCapturer 初始化时已将
+ * IOSurfaceAccelerator 的 RunLoop Source 挂到主 RunLoop，后续截图可在任意线程同步调用。
+ */
+static NSData *CaptureJPEG(void) {
     __block NSData *data = nil;
     __block NSError *error = nil;
-    if ([NSThread isMainThread]) {
-        data = [[ScreenCapturer sharedCapturer] captureJPEGWithQuality:0.85 error:&error];
-    } else {
-        dispatch_sync(dispatch_get_main_queue(), ^{
-            data = [[ScreenCapturer sharedCapturer] captureJPEGWithQuality:0.85 error:&error];
-        });
-    }
+    data = [[ScreenCapturer sharedCapturer] captureJPEGWithQuality:0.85 error:&error];
     if (error) {
         [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"截图失败: %@", error.localizedDescription]];
     }
@@ -113,7 +113,7 @@ static void HandleClientConnection(int client) {
         }
 
         [[TSLogger sharedLogger] log:@"开始截图..."];
-        NSData *jpeg = CaptureJPEGOnMainThread();
+        NSData *jpeg = CaptureJPEG();
         if (!jpeg) {
             NSData *empty = [NSData data];
             SendResponse(client, 500, nil, empty);

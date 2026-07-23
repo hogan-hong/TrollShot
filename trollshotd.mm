@@ -58,10 +58,10 @@ int main(int argc, const char *argv[]) {
         pthread_create(&serverThread, NULL, ServerThreadEntry, NULL);
         pthread_detach(serverThread);
 
-        /* 主线程保持 runloop 运转，供 ScreenCapturer 的 IOSurfaceAccelerator 使用 */
-        while (gKeepRunning) {
-            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.0, false);
-        }
+        /* 主线程保持 runloop 运转，供 ScreenCapturer 的 IOSurfaceAccelerator RunLoop Source 使用。
+         * 直接用 CFRunLoopRun() 而不是循环调用 CFRunLoopRunInMode，
+         * 确保 GCD 主队列和 RunLoop Source 都能正常处理。 */
+        CFRunLoopRun();
 
         NSLog(@"[TrollShot] trollshotd 退出");
     }
