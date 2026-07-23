@@ -1,0 +1,65 @@
+name: Build TrollShot IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  FINALPACKAGE: 1
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install ldid-procursus p7zip make
+
+      - name: Checkout Theos
+        uses: actions/checkout@v4
+        with:
+          repository: theos/theos
+          path: theos
+          submodules: recursive
+
+      - name: Install iOS SDK
+        run: |
+          export THEOS=$GITHUB_WORKSPACE/theos
+          cd theos
+          ./bin/install-sdk iPhoneOS14.5
+          ./bin/install-sdk iPhoneOS16.5
+
+      - name: Build package
+        run: |
+          export THEOS=$GITHUB_WORKSPACE/theos
+          make clean package
+
+      - name: Package IPA
+        run: |
+          mkdir -p extracted Payload
+          dpkg-deb -R packages/*.deb extracted
+          APP_PATH=$(find extracted -name "*.app" -type d | head -n1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Failed to find .app bundle"
+            exit 1
+          fi
+          cp -R "$APP_PATH" Payload/
+          cd Payload
+          find . -name ".DS_Store" -delete
+          cd ..
+          zip -r TrollShot.ipa Payload
+          ls -lh TrollShot.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrollShot-IPA
+          path: TrollShot.ipa
+          if-no-files-found: error
