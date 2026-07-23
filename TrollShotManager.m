@@ -10,15 +10,18 @@
 
 #import "TrollShotManager.h"
 
+#import <Foundation/Foundation.h>
+#import <spawn.h>
 #import <sys/stat.h>
 #import <sys/types.h>
+#import <sys/wait.h>
 #import <unistd.h>
 
 #define kDaemonName        @"trollshotd"
 #define kLaunchdPlistName  @"com.hogan.trollshot.plist"
 #define kDaemonDestDir     @"/usr/local/bin"
 #define kLaunchdDestDir    @"/Library/LaunchDaemons"
-#define kLogDir            @"/var/log/trollshot"
+#define kLogDir            @"/var/mobile/trollshot"
 
 @implementation TrollShotManager
 
@@ -60,66 +63,41 @@
     return [[NSFileManager defaultManager] fileExistsAtPath:[self installedDaemonPath] isDirectory:&isDir] && !isDir;
 }
 
-/* 判断 daemon 是否正在运行，通过 launchctl list */
-- (BOOL)isDaemonRunning {
-    NSString *domain = @"system";
-    NSString *service = @"com.hogan.trollshot";
+/* 使用 posix_spawn 执行命令，返回子进程退出码 */
+- (int)spawnCommand:(NSString *)path arguments:(NSArray<NSString *> *)arguments {
+    const char *cPath = [path fileSystemRepresentation];
+    int argc = (int)arguments.count + 1;
+    char **argv = (char **)calloc(argc + 1, sizeof(char *));
+    argv[0] = strdup(cPath);
+    for (int i = 0; i < (int)arguments.count; i++) {
+        argv[i + 1] = strdup([arguments[i] fileSystemRepresentation]);
+    }
+    argv[argc] = NULL;
 
-    NSPipe *pipe = [NSPipe pipe];
-    NSTask *task = [[NSTask alloc] init];
-    task.launchPath = @"/bin/launchctl";
-    task.arguments = @[@"list", service];
-    task.standardOutput = pipe;
-    task.standardError = [NSPipe pipe];
+    pid_t pid = 0;
+    int ret = posix_spawn(&pid, cPath, NULL, NULL, argv, NULL);
 
-    @try {
-        [task launch];
-        [task waitUntilExit];
-    } @catch (NSException *e) {
-        return NO;
+    for (int i = 0; i <= argc; i++) {
+        if (argv[i]) free(argv[i]);
+    }
+    free(argv);
+
+    if (ret != 0) {
+        return -1;
     }
 
-    NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
-    NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    return [output containsString:service];
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    return -1;
 }
 
-/* 运行需要 root 权限的命令，通过 helper 方式用 launchctl 启动时会自动提权 */
-- (BOOL)runCommandWithArguments:(NSArray<NSString *> *)arguments
-                          error:(NSError **)error {
-    NSPipe *outPipe = [NSPipe pipe];
-    NSPipe *errPipe = [NSPipe pipe];
-
-    NSTask *task = [[NSTask alloc] init];
-    task.launchPath = arguments.firstObject;
-    task.arguments = [arguments subarrayWithRange:NSMakeRange(1, arguments.count - 1)];
-    task.standardOutput = outPipe;
-    task.standardError = errPipe;
-
-    @try {
-        [task launch];
-        [task waitUntilExit];
-    } @catch (NSException *e) {
-        if (error) {
-            *error = [NSError errorWithDomain:@"TrollShot"
-                                         code:1001
-                                     userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"启动命令失败: %@", e.reason]}];
-        }
-        return NO;
-    }
-
-    if (task.terminationStatus != 0) {
-        NSData *errData = [errPipe.fileHandleForReading readDataToEndOfFile];
-        NSString *errStr = [[NSString alloc] initWithData:errData encoding:NSUTF8StringEncoding];
-        if (error) {
-            *error = [NSError errorWithDomain:@"TrollShot"
-                                         code:1002
-                                     userInfo:@{NSLocalizedDescriptionKey : errStr ?: @"未知错误"}];
-        }
-        return NO;
-    }
-
-    return YES;
+/* 判断 daemon 是否正在运行 */
+- (BOOL)isDaemonRunning {
+    int status = [self spawnCommand:@"/bin/launchctl" arguments:@[@"list", @"com.hogan.trollshot"]];
+    return status == 0;
 }
 
 /* 创建日志目录 */
@@ -129,8 +107,7 @@
     if (![fm fileExistsAtPath:kLogDir isDirectory:&isDir]) {
         return [fm createDirectoryAtPath:kLogDir
              withIntermediateDirectories:YES
-                              attributes:@{NSFileOwnerAccountName : @"root",
-                                           NSFileGroupOwnerAccountName : @"wheel"}
+                              attributes:nil
                                    error:error];
     }
     return YES;
@@ -161,7 +138,6 @@
 
     if (![self ensureLogDirectory:error]) return NO;
 
-    /* 复制可执行文件 */
     NSError *copyErr = nil;
     [[NSFileManager defaultManager] removeItemAtPath:[self installedDaemonPath] error:nil];
     if (![[NSFileManager defaultManager] copyItemAtPath:srcBin
@@ -171,10 +147,8 @@
         return NO;
     }
 
-    /* 设置可执行权限 */
     chmod([[self installedDaemonPath] fileSystemRepresentation], 0755);
 
-    /* 复制 plist */
     [[NSFileManager defaultManager] removeItemAtPath:[self installedPlistPath] error:nil];
     if (![[NSFileManager defaultManager] copyItemAtPath:srcPlist
                                                  toPath:[self installedPlistPath]
@@ -194,12 +168,32 @@
         if (![self installDaemon:error]) return NO;
     }
 
-    return [self runCommandWithArguments:@[@"/bin/launchctl", @"load", @"-w", [self installedPlistPath]] error:error];
+    int status = [self spawnCommand:@"/bin/launchctl"
+                          arguments:@[@"load", @"-w", [self installedPlistPath]]];
+    if (status != 0) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"TrollShot"
+                                         code:3001
+                                     userInfo:@{NSLocalizedDescriptionKey : @"launchctl load 失败，请检查是否已越狱或 TrollStore 权限"}];
+        }
+        return NO;
+    }
+    return YES;
 }
 
 /* 停止 daemon */
 - (BOOL)stopDaemon:(NSError **)error {
-    return [self runCommandWithArguments:@[@"/bin/launchctl", @"unload", @"-w", [self installedPlistPath]] error:error];
+    int status = [self spawnCommand:@"/bin/launchctl"
+                          arguments:@[@"unload", @"-w", [self installedPlistPath]]];
+    if (status != 0) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"TrollShot"
+                                         code:3002
+                                     userInfo:@{NSLocalizedDescriptionKey : @"launchctl unload 失败"}];
+        }
+        return NO;
+    }
+    return YES;
 }
 
 /* 卸载 daemon */

@@ -75,7 +75,7 @@ zip -r TrollShot.ipa Payload
 daemon 运行日志位于：
 
 ```
-/var/log/trollshot/trollshotd.log
+/var/mobile/trollshot/trollshotd.log
 ```
 
 可以通过 SSH 或文件管理工具导出该日志进行排查。

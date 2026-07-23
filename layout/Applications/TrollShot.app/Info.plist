@@ -8,6 +8,36 @@
 	<string>TrollShot</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.example.trollshot</string>
+	<key>CFBundleIconFiles</key>
+	<array>
+		<string>AppIcon60x60@2x</string>
+		<string>AppIcon60x60@3x</string>
+		<string>AppIcon76x76@2x</string>
+		<string>AppIcon83.5x83.5@2x</string>
+		<string>AppIcon1024x1024</string>
+	</array>
+	<key>CFBundleIcons</key>
+	<dict>
+		<key>CFBundlePrimaryIcon</key>
+		<dict>
+			<key>CFBundleIconFiles</key>
+			<array>
+				<string>AppIcon60x60@2x</string>
+				<string>AppIcon60x60@3x</string>
+			</array>
+		</dict>
+	</dict>
+	<key>CFBundleIcons~ipad</key>
+	<dict>
+		<key>CFBundlePrimaryIcon</key>
+		<dict>
+			<key>CFBundleIconFiles</key>
+			<array>
+				<string>AppIcon76x76@2x</string>
+				<string>AppIcon83.5x83.5@2x</string>
+			</array>
+		</dict>
+	</dict>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

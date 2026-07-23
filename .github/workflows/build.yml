@@ -40,6 +40,7 @@ jobs:
 
       - name: 构建应用
         run: |
+          set -o pipefail
           export THEOS=$GITHUB_WORKSPACE/theos
           make clean package 2>&1 | tee build.log
 
@@ -54,6 +55,7 @@ jobs:
       - name: 打包 IPA
         if: success()
         run: |
+          set -x
           echo "=== 查找 .deb 包 ==="
           find . -name "*.deb" -type f
           DEB=$(find . -name "*.deb" -type f | head -n1)
@@ -68,13 +70,14 @@ jobs:
           dpkg-deb -c "$DEB" | sort
 
           echo "=== 解包 .deb ==="
+          rm -rf extracted Payload TrollShot.ipa
           mkdir -p extracted Payload
           dpkg-deb -R "$DEB" extracted
 
           echo "=== 解包后目录结构 ==="
-          find extracted -maxdepth 6 -type d | sort
+          find extracted -maxdepth 8 -type d | sort
 
-          APP_PATH=$(find extracted -name "*.app" -maxdepth 4 -type d | head -n1)
+          APP_PATH=$(find extracted -name "*.app" -maxdepth 6 -type d | head -n1)
           if [ -z "$APP_PATH" ]; then
             echo "未找到 .app 包"
             exit 1
@@ -92,34 +95,33 @@ jobs:
           ls -la Payload/
           ls -la "Payload/$APP_NAME/"
 
-          # 确保 Info.plist 存在，若 Theos 未复制则从项目根补充
+          # 确保 Info.plist 存在
           if [ ! -f "Payload/$APP_NAME/Info.plist" ]; then
             echo "Info.plist 不在 .app 中，从项目根复制"
             cp Info.plist "Payload/$APP_NAME/Info.plist"
           fi
 
-          # 确保可执行文件存在且有执行权限
+          # 确保主可执行文件
           EXEC_NAME=$(/usr/libexec/PlistBuddy -c "Print CFBundleExecutable" "Payload/$APP_NAME/Info.plist" 2>/dev/null || echo "TrollShot")
           echo "EXEC_NAME=$EXEC_NAME"
-          if [ ! -f "Payload/$APP_NAME/$EXEC_NAME" ]; then
-            echo "警告：未找到可执行文件 Payload/$APP_NAME/$EXEC_NAME"
-          else
+          if [ -f "Payload/$APP_NAME/$EXEC_NAME" ]; then
             chmod +x "Payload/$APP_NAME/$EXEC_NAME"
+          else
+            echo "警告：未找到可执行文件 Payload/$APP_NAME/$EXEC_NAME"
           fi
 
-          # 确保 trollshotd 可执行文件和 launchd plist 在 .app 中
-          # 如果 before-package 未复制，则从 .deb 解包后的 staging 目录补充
+          # 确保 trollshotd 和 launchd plist 在 .app 中
           if [ ! -f "Payload/$APP_NAME/trollshotd" ]; then
             STAGED_BIN=$(find extracted -name "trollshotd" -type f | head -n1)
+            echo "尝试从 extracted 查找 trollshotd: $STAGED_BIN"
             if [ -n "$STAGED_BIN" ]; then
-              echo "从 $STAGED_BIN 复制 trollshotd"
               cp -p "$STAGED_BIN" "Payload/$APP_NAME/trollshotd"
             fi
           fi
           if [ ! -f "Payload/$APP_NAME/com.hogan.trollshot.plist" ]; then
             STAGED_PLIST=$(find extracted -name "com.hogan.trollshot.plist" -type f | head -n1)
+            echo "尝试从 extracted 查找 plist: $STAGED_PLIST"
             if [ -n "$STAGED_PLIST" ]; then
-              echo "从 $STAGED_PLIST 复制 plist"
               cp -p "$STAGED_PLIST" "Payload/$APP_NAME/com.hogan.trollshot.plist"
             fi
           fi
