@@ -17,19 +17,19 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (instancetype)sharedManager;
 
-/* daemon 是否已安装到系统目录 */
+/* daemon 是否已安装到用户可写目录 */
 @property (nonatomic, readonly) BOOL isDaemonInstalled;
 
 /* daemon 是否正在运行 */
 @property (nonatomic, readonly) BOOL isDaemonRunning;
 
-/* 将 IPA 中的 daemon 安装到 /usr/local/bin/ */
+/* 将 IPA 中的 daemon 安装到 /var/mobile/trollshot/ */
 - (BOOL)installDaemon:(NSError **)error;
 
-/* 启动 launchd daemon */
+/* 直接启动 daemon 进程 */
 - (BOOL)startDaemon:(NSError **)error;
 
-/* 停止 launchd daemon */
+/* 停止 daemon 进程 */
 - (BOOL)stopDaemon:(NSError **)error;
 
 /* 卸载 daemon 和 plist */

@@ -6,7 +6,7 @@
 	<string>com.hogan.trollshot</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/usr/local/bin/trollshotd</string>
+		<string>/var/mobile/trollshot/trollshotd</string>
 		<string>--port</string>
 		<string>8080</string>
 	</array>

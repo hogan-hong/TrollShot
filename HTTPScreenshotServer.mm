@@ -13,9 +13,24 @@
 
 #import <arpa/inet.h>
 #import <netinet/in.h>
+#import <pthread.h>
 #import <string.h>
 #import <sys/socket.h>
 #import <unistd.h>
+
+/* 客户端连接参数 */
+struct ClientContext {
+    int clientSocket;
+};
+
+/* 客户端处理线程入口 */
+static void *HandleClientThread(void *arg) {
+    struct ClientContext *ctx = (struct ClientContext *)arg;
+    int client = ctx->clientSocket;
+    free(ctx);
+    HandleClientConnection(client);
+    return NULL;
+}
 
 static NSData *CaptureJPEGOnMainThread(void) {
     __block NSData *data = nil;
@@ -136,8 +151,11 @@ extern "C" void StartScreenshotServer(uint16_t port) {
         if (client < 0)
             continue;
 
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            HandleClientConnection(client);
-        });
+        /* 每个连接用独立 pthread 处理，避免 GCD 在 daemon 里不工作 */
+        struct ClientContext *ctx = (struct ClientContext *)malloc(sizeof(struct ClientContext));
+        ctx->clientSocket = client;
+        pthread_t clientThread;
+        pthread_create(&clientThread, NULL, HandleClientThread, ctx);
+        pthread_detach(clientThread);
     }
 }
