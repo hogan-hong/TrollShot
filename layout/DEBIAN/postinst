@@ -1,0 +1,37 @@
+#!/bin/bash
+# TrollShot postinst
+# TrollStore / Cydia 安装本 deb 包时以 root 权限执行，
+# 将 trollshotd 和 launchd plist 安装到系统目录，实现开机自启。
+
+set -e
+
+APP_PATH="/Applications/TrollShot.app"
+DAEMON_SRC="${APP_PATH}/trollshotd"
+PLIST_SRC="${APP_PATH}/com.hogan.trollshot.plist"
+
+if [ ! -f "${DAEMON_SRC}" ]; then
+    echo "TrollShot: 未找到 ${DAEMON_SRC}" >&2
+    exit 1
+fi
+
+if [ ! -f "${PLIST_SRC}" ]; then
+    echo "TrollShot: 未找到 ${PLIST_SRC}" >&2
+    exit 1
+fi
+
+# 确保日志目录存在
+mkdir -p /var/mobile/trollshot
+
+# 复制 daemon 到系统目录
+cp -f "${DAEMON_SRC}" /usr/bin/trollshotd
+chmod 755 /usr/bin/trollshotd
+
+# 复制 plist 到 LaunchDaemons
+cp -f "${PLIST_SRC}" /Library/LaunchDaemons/com.hogan.trollshot.plist
+chmod 644 /Library/LaunchDaemons/com.hogan.trollshot.plist
+
+# 加载服务；先 unload 再 load 避免重复加载报错
+launchctl unload -w /Library/LaunchDaemons/com.hogan.trollshot.plist 2>/dev/null || true
+launchctl load -w /Library/LaunchDaemons/com.hogan.trollshot.plist
+
+exit 0

@@ -14,14 +14,13 @@
 #import <arpa/inet.h>
 #import <netinet/in.h>
 #import <pthread.h>
-#import <semaphore.h>
 #import <string.h>
 #import <sys/socket.h>
 #import <unistd.h>
 
 /* 最大并发截图请求数，避免高并发时创建过多线程导致系统拒绝连接 */
 static const int kMaxConcurrentRequests = 4;
-static sem_t gConcurrencySem;
+static dispatch_semaphore_t gConcurrencySem;
 
 /* HandleClientConnection 在下方定义，线程入口需要前向声明 */
 static void HandleClientConnection(int client);
@@ -40,7 +39,7 @@ static void *HandleClientThread(void *arg) {
         @try {
             HandleClientConnection(client);
         } @finally {
-            sem_post(&gConcurrencySem);
+            dispatch_semaphore_signal(gConcurrencySem);
         }
         return NULL;
     }
@@ -160,7 +159,8 @@ extern "C" void StartScreenshotServer(uint16_t port) {
 
     [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"HTTP 服务器已在端口 %d 监听，最大并发 %d", port, kMaxConcurrentRequests]];
 
-    if (sem_init(&gConcurrencySem, 0, kMaxConcurrentRequests) != 0) {
+    gConcurrencySem = dispatch_semaphore_create(kMaxConcurrentRequests);
+    if (!gConcurrencySem) {
         [[TSLogger sharedLogger] log:@"初始化并发控制信号量失败"];
         close(serverSocket);
         return;
@@ -172,7 +172,7 @@ extern "C" void StartScreenshotServer(uint16_t port) {
             continue;
 
         /* 如果并发数已满，直接返回 503，避免无限创建线程 */
-        if (sem_trywait(&gConcurrencySem) != 0) {
+        if (dispatch_semaphore_wait(gConcurrencySem, DISPATCH_TIME_NOW) != 0) {
             const char *resp = "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             send(client, resp, strlen(resp), 0);
             close(client);
