@@ -13,7 +13,7 @@
 #import <arpa/inet.h>
 #import <ifaddrs.h>
 
-@interface AppDelegate () <UIAlertControllerDelegate>
+@interface AppDelegate ()
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIButton *toggleButton;
 @property (nonatomic, strong) UIButton *debugButton;
