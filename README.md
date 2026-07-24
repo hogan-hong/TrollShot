@@ -62,11 +62,59 @@ make clean package FINALPACKAGE=1
 
 ## 使用方法
 
+### 基本使用
+
 1. 通过 TrollStore 安装 `TrollShot.ipa`。
 2. 在设备上打开 TrollShot 应用。
 3. 点击"启动服务"。
 4. 等待界面显示"服务状态：运行中"。
 5. 在同一局域网内的另一台设备上访问 `http://<设备IP>:8080/screenshot`。
+
+### API 接口
+
+```
+GET http://<设备IP>:8080/screenshot
+```
+
+支持以下查询参数，可单独使用或组合使用：
+
+| 参数 | 格式 | 说明 |
+|------|------|------|
+| `rotate` | `rotate=1` | 强制顺时针旋转 90 度。不加此参数时自动检测设备方向（横屏自动旋转，竖屏不旋转）。 |
+| `crop` | `crop=x1,y1,x2,y2` | 裁剪指定区域。x1,y1 为左上角坐标，x2,y2 为右下角坐标。坐标基于旋转后的最终图像。不加此参数时返回全屏截图。 |
+
+#### 示例
+
+```
+# 全屏截图（自动检测横竖屏）
+GET /screenshot
+
+# 强制旋转
+GET /screenshot?rotate=1
+
+# 裁剪指定区域（左上角 0,0 到右下角 667,750）
+GET /screenshot?crop=0,0,667,750
+
+# 旋转 + 裁剪组合使用
+GET /screenshot?rotate=1&crop=0,0,667,750
+```
+
+#### 自动横竖屏检测
+
+TrollShot 通过 `FBSOrientationObserver`（FrontBoardServices 私有框架）自动检测设备方向，参考 TrollVNC 的方案。横屏（LandscapeLeft / LandscapeRight）时自动顺时针旋转 90 度输出，竖屏（Portrait）时保持原始方向。
+
+iPhone 物理截屏像素固定为 750x1334（竖屏），横屏游戏时自动旋转输出为 1334x750。
+
+#### 诊断响应头
+
+每次截图响应包含以下 HTTP 头，可用于调试：
+
+| 响应头 | 说明 |
+|--------|------|
+| `X-Orig-Size` | 原始截图尺寸（旋转前），如 `750x1334` |
+| `X-Final-Size` | 最终输出尺寸（旋转/裁剪后），如 `1334x750` |
+| `X-Rotated` | 是否进行了旋转，`YES` 或 `NO` |
+| `X-Crop` | 裁剪区域坐标，如 `0,0,667,750`；未裁剪时为 `none` |
 
 ## 停止与卸载
 
@@ -92,12 +140,12 @@ daemon 运行日志位于：
 
 ## 文件说明
 
-- `ScreenCapturer.{h,mm}` — 通过私有 API 截屏
-- `HTTPScreenshotServer.{h,mm}` — 迷你 HTTP 服务器
-- `trollshotd.mm` — 后台 daemon 入口
-- `TrollShotManager.{h,m}` — 启动/停止 daemon 的管理逻辑
-- `AppDelegate.{h,m}` / `main.m` — iOS 应用启动入口
-- `include-spi/` — 私有框架的最小声明
-- `layout/Library/LaunchDaemons/com.hogan.trollshot.plist` — 可选的 launchd 配置
-- `TrollShot.entitlements` — 必需的 entitlement
-- `Makefile` — Theos 构建配置
+- `ScreenCapturer.{h,mm}` - 通过私有 API 截屏，包含旋转（FBSOrientationObserver）和裁剪逻辑
+- `HTTPScreenshotServer.{h,mm}` - 迷你 HTTP 服务器，解析 `rotate` / `crop` 查询参数
+- `trollshotd.mm` - 后台 daemon 入口
+- `TrollShotManager.{h,m}` - 启动/停止 daemon 的管理逻辑
+- `AppDelegate.{h,m}` / `main.m` - iOS 应用启动入口
+- `include-spi/` - 私有框架的最小声明（含 `FBSOrientationObserver.h`，来自 TrollVNC）
+- `layout/Library/LaunchDaemons/com.hogan.trollshot.plist` - 可选的 launchd 配置
+- `TrollShot.entitlements` - 必需的 entitlement
+- `Makefile` - Theos 构建配置（链接 FrontBoardServices 私有框架）
