@@ -12,6 +12,13 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+/* 诊断用：记录最近一次截图的原始尺寸和是否旋转 */
+extern size_t g_lastOrigWidth;
+extern size_t g_lastOrigHeight;
+extern size_t g_lastFinalWidth;
+extern size_t g_lastFinalHeight;
+extern BOOL g_lastRotated;
+
 @interface ScreenCapturer : NSObject
 
 + (instancetype)sharedCapturer;

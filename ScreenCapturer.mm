@@ -16,11 +16,19 @@
 #import "IOSurfaceSPI.h"
 #import "UIScreen+Private.h"
 
+/* 诊断全局变量 */
+size_t g_lastOrigWidth = 0;
+size_t g_lastOrigHeight = 0;
+size_t g_lastFinalWidth = 0;
+size_t g_lastFinalHeight = 0;
+BOOL g_lastRotated = NO;
+
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 #import <CoreImage/CoreImage.h>
 #import <ImageIO/ImageIO.h>
 #import <UIKit/UIKit.h>
+#import <syslog.h>
 #import "TSLogger.h"
 
 #ifdef __cplusplus
@@ -142,11 +150,21 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
      * 缓冲区高度 > 宽度（竖屏形状）时，说明横屏游戏画面被装在竖屏缓冲区内，
      * 用 CGContext 顺时针旋转90度，输出 1334x750 横屏 JPEG。
      */
+    g_lastRotated = NO;
+    g_lastOrigWidth = 0;
+    g_lastOrigHeight = 0;
+    g_lastFinalWidth = 0;
+    g_lastFinalHeight = 0;
+
     if (cgImage) {
         size_t imgWidth = CGImageGetWidth(cgImage);
         size_t imgHeight = CGImageGetHeight(cgImage);
+        g_lastOrigWidth = imgWidth;
+        g_lastOrigHeight = imgHeight;
+        g_lastFinalWidth = imgWidth;
+        g_lastFinalHeight = imgHeight;
 
-        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"原始图像尺寸: %zux%zu", imgWidth, imgHeight]];
+        syslog(LOG_NOTICE, "[TrollShot] 原始图像尺寸: %zux%zu", imgWidth, imgHeight);
 
         if (imgHeight > imgWidth) {
             /* 顺时针90°: 平移+旋转，输出宽高互换 */
@@ -164,11 +182,21 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
                 CGImageRelease(cgImage);
                 cgImage = CGBitmapContextCreateImage(ctx);
                 CGContextRelease(ctx);
-
-                [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"旋转后图像尺寸: %zux%zu",
-                    CGImageGetWidth(cgImage), CGImageGetHeight(cgImage)]];
+                g_lastRotated = YES;
+                if (cgImage) {
+                    g_lastFinalWidth = CGImageGetWidth(cgImage);
+                    g_lastFinalHeight = CGImageGetHeight(cgImage);
+                }
+                syslog(LOG_NOTICE, "[TrollShot] 旋转后图像尺寸: %zux%zu rotated=YES",
+                    g_lastFinalWidth, g_lastFinalHeight);
+            } else {
+                syslog(LOG_ERR, "[TrollShot] CGBitmapContextCreate 失败! ctx=NULL");
             }
+        } else {
+            syslog(LOG_NOTICE, "[TrollShot] 不需要旋转 (height<=width), rotated=NO");
         }
+    } else {
+        syslog(LOG_ERR, "[TrollShot] cgImage 为 NULL! createCGImage 失败");
     }
 
     NSData *jpegData = nil;

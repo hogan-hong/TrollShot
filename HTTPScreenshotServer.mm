@@ -122,7 +122,22 @@ static void HandleClientConnection(int client) {
         }
 
         [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"截图成功，大小 %lu 字节", (unsigned long)jpeg.length]];
-        SendResponse(client, 200, @"image/jpeg", jpeg);
+
+        /* 诊断：在响应头输出图像尺寸信息 */
+        NSMutableString *header = [NSMutableString string];
+        [header appendFormat:@"HTTP/1.1 200 OK\r\n"];
+        [header appendFormat:@"Content-Type: image/jpeg\r\n"];
+        [header appendFormat:@"Content-Length: %lu\r\n", (unsigned long)jpeg.length];
+        [header appendFormat:@"X-Orig-Size: %zux%zu\r\n", g_lastOrigWidth, g_lastOrigHeight];
+        [header appendFormat:@"X-Final-Size: %zux%zu\r\n", g_lastFinalWidth, g_lastFinalHeight];
+        [header appendFormat:@"X-Rotated: %s\r\n", g_lastRotated ? "YES" : "NO"];
+        [header appendString:@"Connection: close\r\n"];
+        [header appendString:@"Cache-Control: no-store\r\n"];
+        [header appendString:@"\r\n"];
+
+        const char *headerBytes = header.UTF8String;
+        send(client, headerBytes, strlen(headerBytes), 0);
+        send(client, jpeg.bytes, jpeg.length, 0);
         close(client);
     }
 }
