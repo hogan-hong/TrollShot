@@ -104,7 +104,15 @@ static void HandleClientConnection(int client) {
 
         [[TSLogger sharedLogger] log:@"收到 HTTP 请求"];
 
-        if (strncmp(buf, "GET /screenshot", 15) != 0) {
+        /* 解析 URL 查询参数，支持 /screenshot?rotate=1 */
+        BOOL doRotate = NO;
+        if (strncmp(buf, "GET /screenshot", 15) == 0) {
+            /* 检查是否有 rotate=1 参数 */
+            char *query = strstr(buf, "rotate=1");
+            if (query) {
+                doRotate = YES;
+            }
+        } else {
             NSData *empty = [NSData data];
             SendResponse(client, 404, nil, empty);
             close(client);
@@ -112,8 +120,12 @@ static void HandleClientConnection(int client) {
             return;
         }
 
-        [[TSLogger sharedLogger] log:@"开始截图..."];
-        NSData *jpeg = CaptureJPEG();
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"开始截图... rotate=%d", doRotate]];
+        NSError *captureError = nil;
+        NSData *jpeg = [[ScreenCapturer sharedCapturer] captureJPEGWithQuality:0.85 rotate:doRotate error:&captureError];
+        if (captureError) {
+            [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"截图失败: %@", captureError.localizedDescription]];
+        }
         if (!jpeg) {
             NSData *empty = [NSData data];
             SendResponse(client, 500, nil, empty);

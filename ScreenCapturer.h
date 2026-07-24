@@ -26,8 +26,8 @@ extern BOOL g_lastRotated;
 + (instancetype)new NS_UNAVAILABLE;
 - (instancetype)init NS_UNAVAILABLE;
 
-/** 截取当前屏幕并编码为 JPEG。quality 范围为 0..1。 */
-- (nullable NSData *)captureJPEGWithQuality:(CGFloat)quality error:(NSError **)error;
+/** 截取当前屏幕并编码为 JPEG。quality 范围为 0..1。rotate 为 YES 时顺时针旋转90度。 */
+- (nullable NSData *)captureJPEGWithQuality:(CGFloat)quality rotate:(BOOL)rotate error:(NSError **)error;
 
 @end
 

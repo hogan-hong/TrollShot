@@ -103,7 +103,7 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
     return self;
 }
 
-- (NSData *)captureJPEGWithQuality:(CGFloat)quality error:(NSError **)error {
+- (NSData *)captureJPEGWithQuality:(CGFloat)quality rotate:(BOOL)rotate error:(NSError **)error {
     if (quality < 0.0)
         quality = 0.0;
     if (quality > 1.0)
@@ -166,7 +166,7 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
 
         syslog(LOG_NOTICE, "[TrollShot] 原始图像尺寸: %zux%zu", imgWidth, imgHeight);
 
-        if (imgHeight > imgWidth) {
+        if (rotate && imgHeight > imgWidth) {
             /* 顺时针90°: 平移+旋转，输出宽高互换 */
             CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
             CGContextRef ctx = CGBitmapContextCreate(NULL,
