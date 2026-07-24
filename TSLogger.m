@@ -51,6 +51,7 @@
 }
 
 - (void)log:(NSString *)message {
+    if (!_debugEnabled) return;
     dispatch_async(_queue, ^{
         NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [self->_formatter stringFromDate:[NSDate date]], message];
         NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];

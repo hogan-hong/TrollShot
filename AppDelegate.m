@@ -13,9 +13,10 @@
 #import <arpa/inet.h>
 #import <ifaddrs.h>
 
-@interface AppDelegate ()
+@interface AppDelegate () <UIAlertControllerDelegate>
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIButton *toggleButton;
+@property (nonatomic, strong) UIButton *debugButton;
 @end
 
 @implementation AppDelegate
@@ -53,6 +54,18 @@
     [self.toggleButton addTarget:self action:@selector(toggleService:) forControlEvents:UIControlEventTouchUpInside];
     [rootVC.view addSubview:self.toggleButton];
 
+    /* 调试模式按钮 */
+    self.debugButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.debugButton.frame = CGRectMake(40, 370, rootVC.view.bounds.size.width - 80, 44);
+    self.debugButton.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [self.debugButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    self.debugButton.titleLabel.font = [UIFont systemFontOfSize:16];
+    self.debugButton.layer.cornerRadius = 8;
+    self.debugButton.layer.borderWidth = 1;
+    self.debugButton.layer.borderColor = [UIColor grayColor].CGColor;
+    [self.debugButton addTarget:self action:@selector(toggleDebugMode:) forControlEvents:UIControlEventTouchUpInside];
+    [rootVC.view addSubview:self.debugButton];
+
     self.window.rootViewController = rootVC;
     [self.window makeKeyAndVisible];
 
@@ -71,6 +84,7 @@
 - (void)refreshUI {
     TrollShotManager *mgr = [TrollShotManager sharedManager];
     BOOL running = mgr.isDaemonRunning;
+    BOOL debug = [TrollShotManager isDebugMode];
 
     if (running) {
         NSString *ip = [self localIPAddress];
@@ -79,6 +93,15 @@
     } else {
         self.statusLabel.text = @"服务状态：已停止\n点击下方按钮启动";
         [self.toggleButton setTitle:@"启动服务" forState:UIControlStateNormal];
+    }
+
+    /* 调试模式按钮状态 */
+    if (debug) {
+        [self.debugButton setTitle:@"调试模式：开启（点击关闭）" forState:UIControlStateNormal];
+        self.debugButton.backgroundColor = [UIColor colorWithRed:0.2 green:0.6 blue:0.2 alpha:0.8];
+    } else {
+        [self.debugButton setTitle:@"调试模式：关闭（点击开启）" forState:UIControlStateNormal];
+        self.debugButton.backgroundColor = [UIColor clearColor];
     }
 }
 
@@ -128,6 +151,53 @@
     }
 
     [self refreshUI];
+}
+
+- (void)toggleDebugMode:(UIButton *)sender {
+    BOOL currentDebug = [TrollShotManager isDebugMode];
+    BOOL newDebug = !currentDebug;
+
+    /* 开启调试模式时询问是否清空旧日志 */
+    if (newDebug) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"开启调试模式"
+                                                                       message:@"将开始记录运行日志。是否同时清空旧的日志文件？"
+                                                                preferredStyle:UIAlertControllerStyleActionSheet];
+        [alert addAction:[UIAlertAction actionWithTitle:@"开启并清空日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            [TrollShotManager setDebugMode:YES];
+            [TrollShotManager clearLogFile];
+            [self restartDaemonIfNeeded];
+            [self refreshUI];
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"开启（保留旧日志）" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            [TrollShotManager setDebugMode:YES];
+            [self restartDaemonIfNeeded];
+            [self refreshUI];
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+        [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
+    } else {
+        /* 关闭调试模式 */
+        [TrollShotManager setDebugMode:NO];
+        [self restartDaemonIfNeeded];
+        [self refreshUI];
+    }
+}
+
+/* 调试模式切换后，如果 daemon 在运行则自动重启使设置生效 */
+- (void)restartDaemonIfNeeded {
+    TrollShotManager *mgr = [TrollShotManager sharedManager];
+    if (mgr.isDaemonRunning) {
+        [mgr stopDaemon:nil];
+        [NSThread sleepForTimeInterval:0.3];
+        NSError *err = nil;
+        if (![mgr startDaemon:&err]) {
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"重启失败"
+                                                                           message:err.localizedDescription ?: @"未知错误"
+                                                                    preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:nil]];
+            [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
+        }
+    }
 }
 
 @end

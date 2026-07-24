@@ -23,9 +23,11 @@
 #import <unistd.h>
 
 #import "HTTPScreenshotServer.h"
+#import "TSLogger.h"
 
 static volatile BOOL gKeepRunning = YES;
 static uint16_t gPort = 8080;
+static BOOL gDebug = NO;
 
 static void onSignal(int sig) {
     gKeepRunning = NO;
@@ -46,12 +48,21 @@ int main(int argc, const char *argv[]) {
         signal(SIGHUP, SIG_IGN);
 
         uint16_t port = 8080;
-        if (argc >= 3 && strcmp(argv[1], "--port") == 0) {
-            port = (uint16_t)atoi(argv[2]);
+        for (int i = 1; i < argc; i++) {
+            if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+                port = (uint16_t)atoi(argv[++i]);
+            } else if (strcmp(argv[i], "--debug") == 0) {
+                gDebug = YES;
+            }
         }
         gPort = port;
 
-        NSLog(@"[TrollShot] trollshotd 启动，监听端口 %u", port);
+        /* 调试模式开启时才写日志 */
+        [TSLogger sharedLogger].debugEnabled = gDebug;
+
+        if (gDebug) {
+            NSLog(@"[TrollShot] trollshotd 启动（调试模式），监听端口 %u", port);
+        }
 
         /* HTTP 服务在独立 pthread 中运行，避免阻塞主 runloop，同时不依赖 GCD */
         pthread_t serverThread;
@@ -63,7 +74,9 @@ int main(int argc, const char *argv[]) {
          * 确保 GCD 主队列和 RunLoop Source 都能正常处理。 */
         CFRunLoopRun();
 
-        NSLog(@"[TrollShot] trollshotd 退出");
+        if (gDebug) {
+            NSLog(@"[TrollShot] trollshotd 退出");
+        }
     }
     return 0;
 }

@@ -27,6 +27,7 @@
 #define kDaemonDestDir     @"/var/mobile/trollshot"
 #define kLogDir            @"/var/mobile/trollshot"
 #define kListenPort        8080
+#define kDebugFlagFile     @"/var/mobile/trollshot/debug_mode"
 
 @implementation TrollShotManager
 
@@ -40,6 +41,29 @@
 /* 获取 TrollShot.app 的路径 */
 - (NSString *)bundlePath {
     return [[NSBundle mainBundle] bundlePath];
+}
+
+/* 读取调试模式标志 */
++ (BOOL)isDebugMode {
+    NSString *content = [NSString stringWithContentsOfFile:kDebugFlagFile
+                                                   encoding:NSUTF8StringEncoding
+                                                      error:nil];
+    return [content trim] isEqualToString:@"1"];
+}
+
+/* 设置调试模式标志，写入标志文件 */
++ (void)setDebugMode:(BOOL)enabled {
+    NSString *content = enabled ? @"1" : @"0";
+    [content writeToFile:kDebugFlagFile
+              atomically:YES
+                encoding:NSUTF8StringEncoding
+                   error:nil];
+}
+
+/* 清空日志文件 */
++ (void)clearLogFile {
+    NSString *logPath = [kLogDir stringByAppendingPathComponent:@"trollshotd.log"];
+    [@"" writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
 /* 获取 IPA 内部的 daemon 路径 */
@@ -171,7 +195,13 @@
 - (BOOL)launchDaemonProcess:(NSError **)error {
     NSString *daemonPath = [self installedDaemonPath];
     const char *cPath = [daemonPath fileSystemRepresentation];
-    NSArray<NSString *> *args = @[@"--port", @"8080"];
+
+    /* 根据调试模式标志决定启动参数 */
+    BOOL debug = [TrollShotManager isDebugMode];
+    NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObjects:@\"--port\", @\"8080\", nil];
+    if (debug) {
+        [args addObject:@"--debug"];
+    }
     int argc = (int)args.count + 1;
     char **argv = (char **)calloc(argc + 1, sizeof(char *));
     argv[0] = strdup(cPath);
@@ -180,16 +210,26 @@
     }
     argv[argc] = NULL;
 
-    /* 重定向 stdout/stderr 到日志文件 */
-    NSString *logPath = [kLogDir stringByAppendingPathComponent:@"trollshotd.log"];
-    int logFd = open([logPath fileSystemRepresentation], O_WRONLY | O_CREAT | O_APPEND, 0644);
-
+    /* 调试模式时重定向 stdout/stderr 到日志文件，否则丢弃输出 */
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
-    if (logFd >= 0) {
-        posix_spawn_file_actions_adddup2(&actions, logFd, STDOUT_FILENO);
-        posix_spawn_file_actions_adddup2(&actions, logFd, STDERR_FILENO);
-        posix_spawn_file_actions_addclose(&actions, logFd);
+
+    if (debug) {
+        NSString *logPath = [kLogDir stringByAppendingPathComponent:@"trollshotd.log"];
+        int logFd = open([logPath fileSystemRepresentation], O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (logFd >= 0) {
+            posix_spawn_file_actions_adddup2(&actions, logFd, STDOUT_FILENO);
+            posix_spawn_file_actions_adddup2(&actions, logFd, STDERR_FILENO);
+            posix_spawn_file_actions_addclose(&actions, logFd);
+        }
+    } else {
+        /* 非调试模式：丢弃 stdout/stderr 到 /dev/null */
+        int devNull = open("/dev/null", O_WRONLY);
+        if (devNull >= 0) {
+            posix_spawn_file_actions_adddup2(&actions, devNull, STDOUT_FILENO);
+            posix_spawn_file_actions_adddup2(&actions, devNull, STDERR_FILENO);
+            posix_spawn_file_actions_addclose(&actions, devNull);
+        }
     }
 
     posix_spawnattr_t attr;
@@ -197,11 +237,10 @@
     posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
 
     pid_t pid = 0;
-    int ret = posix_spawn(&pid, cPath, logFd >= 0 ? &actions : NULL, &attr, argv, NULL);
+    int ret = posix_spawn(&pid, cPath, &actions, &attr, argv, NULL);
 
     posix_spawnattr_destroy(&attr);
     posix_spawn_file_actions_destroy(&actions);
-    if (logFd >= 0) close(logFd);
 
     for (int i = 0; i <= argc; i++) {
         if (argv[i]) free(argv[i]);

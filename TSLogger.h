@@ -16,7 +16,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (instancetype)sharedLogger;
 
-/* 记录一条日志 */
+/* 调试模式开关，YES 时才写日志，默认 NO */
+@property (nonatomic, assign) BOOL debugEnabled;
+
+/* 记录一条日志（仅在 debugEnabled=YES 时写入） */
 - (void)log:(NSString *)message;
 
 /* 日志文件路径 */
