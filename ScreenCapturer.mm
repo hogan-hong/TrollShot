@@ -21,6 +21,7 @@
 #import <CoreImage/CoreImage.h>
 #import <ImageIO/ImageIO.h>
 #import <UIKit/UIKit.h>
+#import "TSLogger.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -128,25 +129,47 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
         return nil;
     }
 
-    /* 用 CoreImage 将 ARGB 缓冲区转为 CGImage */
+    /* 用 CoreImage 将 ARGB 缓冲区转为 CGImage（不做旋转，先拿到原始位图） */
     CIImage *ciImage = [CIImage imageWithCVPixelBuffer:pixelBuffer];
-
-    /* 方向校正：
-     * daemon 进程无法可靠获取 UIDeviceOrientation，因此直接按缓冲区尺寸判断：
-     * 缓冲区高度 > 宽度（竖屏形状）时，说明横屏游戏画面被装在竖屏缓冲区内，
-     * 顺时针旋转90度使画面恢复正常可读方向。
-     */
-    size_t pWidth = CVPixelBufferGetWidth(pixelBuffer);
-    size_t pHeight = CVPixelBufferGetHeight(pixelBuffer);
-
-    if (pHeight > pWidth) {
-        /* 顺时针 90°：top→right, (x,y)→(H-y, x) */
-        CGAffineTransform t = CGAffineTransformMake(0, 1, -1, 0, pHeight, 0);
-        ciImage = [ciImage imageByApplyingTransform:t];
-    }
-
     CIContext *ciContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer : @NO}];
     CGImageRef cgImage = [ciContext createCGImage:ciImage fromRect:[ciImage extent]];
+
+    CVPixelBufferRelease(pixelBuffer);
+
+    /*
+     * 方向校正（CGContext 手动旋转，不依赖 CIImage transform）：
+     * daemon 进程无法可靠获取 UIDeviceOrientation，因此直接按图像尺寸判断。
+     * 缓冲区高度 > 宽度（竖屏形状）时，说明横屏游戏画面被装在竖屏缓冲区内，
+     * 用 CGContext 顺时针旋转90度，输出 1334x750 横屏 JPEG。
+     */
+    if (cgImage) {
+        size_t imgWidth = CGImageGetWidth(cgImage);
+        size_t imgHeight = CGImageGetHeight(cgImage);
+
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"原始图像尺寸: %zux%zu", imgWidth, imgHeight]];
+
+        if (imgHeight > imgWidth) {
+            /* 顺时针90°: 平移+旋转，输出宽高互换 */
+            CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+            CGContextRef ctx = CGBitmapContextCreate(NULL,
+                                                      imgHeight,   /* 新宽 = 旧高 */
+                                                      imgWidth,    /* 新高 = 旧宽 */
+                                                      8, 0, cs,
+                                                      kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host);
+            CGColorSpaceRelease(cs);
+            if (ctx) {
+                CGContextTranslateCTM(ctx, imgHeight, 0);
+                CGContextRotateCTM(ctx, M_PI_2);
+                CGContextDrawImage(ctx, CGRectMake(0, 0, imgWidth, imgHeight), cgImage);
+                CGImageRelease(cgImage);
+                cgImage = CGBitmapContextCreateImage(ctx);
+                CGContextRelease(ctx);
+
+                [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"旋转后图像尺寸: %zux%zu",
+                    CGImageGetWidth(cgImage), CGImageGetHeight(cgImage)]];
+            }
+        }
+    }
 
     NSData *jpegData = nil;
     if (cgImage) {
@@ -165,8 +188,6 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
         }
         CGImageRelease(cgImage);
     }
-
-    CVPixelBufferRelease(pixelBuffer);
 
     if (!jpegData && error) {
         *error = [NSError errorWithDomain:@"TrollShot" code:3 userInfo:@{NSLocalizedDescriptionKey : @"JPEG 编码失败"}];
