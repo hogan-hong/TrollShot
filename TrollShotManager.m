@@ -48,7 +48,7 @@
     NSString *content = [NSString stringWithContentsOfFile:kDebugFlagFile
                                                    encoding:NSUTF8StringEncoding
                                                       error:nil];
-    return [content trim] isEqualToString:@"1"];
+    return [[content stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] isEqualToString:@"1"];
 }
 
 /* 设置调试模式标志，写入标志文件 */
@@ -198,7 +198,7 @@
 
     /* 根据调试模式标志决定启动参数 */
     BOOL debug = [TrollShotManager isDebugMode];
-    NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObjects:@\"--port\", @\"8080\", nil];
+    NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObjects:@"--port", @"8080", nil];
     if (debug) {
         [args addObject:@"--debug"];
     }
