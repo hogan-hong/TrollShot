@@ -36,7 +36,14 @@
     _formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
     _formatter.timeZone = [NSTimeZone localTimeZone];
 
-    /* 优先写到 Documents，如果不可用则写到 tmp */
+    /* 不在 init 中创建文件/打开句柄，改为 log: 首次调用时懒加载，
+     * 确保调试模式关闭时不会创建 Documents/TrollShot.log 文件 */
+    return self;
+}
+
+- (void)ensureFileHandle {
+    if (_fileHandle) return;
+
     NSArray *docPaths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     NSString *baseDir = docPaths.firstObject ?: NSTemporaryDirectory();
     _logPath = [baseDir stringByAppendingPathComponent:@"TrollShot.log"];
@@ -46,13 +53,13 @@
     }
     _fileHandle = [NSFileHandle fileHandleForWritingAtPath:_logPath];
     [_fileHandle seekToEndOfFile];
-
-    return self;
 }
 
 - (void)log:(NSString *)message {
     if (!_debugEnabled) return;
     dispatch_async(_queue, ^{
+        [self ensureFileHandle];
+        if (!self->_fileHandle) return;
         NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [self->_formatter stringFromDate:[NSDate date]], message];
         NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
         [self->_fileHandle writeData:data];

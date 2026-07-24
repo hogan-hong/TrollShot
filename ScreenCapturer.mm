@@ -32,6 +32,12 @@ BOOL g_lastRotated = NO;
 #import <syslog.h>
 #import "TSLogger.h"
 
+/* 调试模式才输出 syslog，避免非调试模式下产生大量系统日志 */
+#define TSLog(priority, fmt, ...) do { \
+    if ([[TSLogger sharedLogger] debugEnabled]) \
+        syslog(priority, fmt, ##__VA_ARGS__); \
+} while(0)
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -172,17 +178,17 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
             @try {
                 FBSOrientationObserver *observer = [[FBSOrientationObserver alloc] init];
                 UIInterfaceOrientation orientation = [observer activeInterfaceOrientation];
-                syslog(LOG_NOTICE, "[TrollShot] FBSOrientationObserver: orientation=%ld", (long)orientation);
+                TSLog(LOG_NOTICE, "[TrollShot] FBSOrientationObserver: orientation=%ld", (long)orientation);
                 if (orientation == UIInterfaceOrientationLandscapeLeft ||
                     orientation == UIInterfaceOrientationLandscapeRight) {
                     shouldRotate = YES;
                 }
             } @catch (NSException *e) {
-                syslog(LOG_ERR, "[TrollShot] FBSOrientationObserver exception: %s", [e.reason UTF8String]);
+                TSLog(LOG_ERR, "[TrollShot] FBSOrientationObserver exception: %s", [e.reason UTF8String]);
             }
         }
 
-        syslog(LOG_NOTICE, "[TrollShot] 原始图像尺寸: %zux%zu, shouldRotate=%d", imgWidth, imgHeight, shouldRotate);
+        TSLog(LOG_NOTICE, "[TrollShot] 原始图像尺寸: %zux%zu, shouldRotate=%d", imgWidth, imgHeight, shouldRotate);
 
         if (shouldRotate && imgHeight > imgWidth) {
             /* 顺时针90°: 平移+旋转，输出宽高互换 */
@@ -205,16 +211,16 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
                     g_lastFinalWidth = CGImageGetWidth(cgImage);
                     g_lastFinalHeight = CGImageGetHeight(cgImage);
                 }
-                syslog(LOG_NOTICE, "[TrollShot] 旋转后图像尺寸: %zux%zu rotated=YES",
+                TSLog(LOG_NOTICE, "[TrollShot] 旋转后图像尺寸: %zux%zu rotated=YES",
                     g_lastFinalWidth, g_lastFinalHeight);
             } else {
-                syslog(LOG_ERR, "[TrollShot] CGBitmapContextCreate 失败! ctx=NULL");
+                TSLog(LOG_ERR, "[TrollShot] CGBitmapContextCreate 失败! ctx=NULL");
             }
         } else {
-            syslog(LOG_NOTICE, "[TrollShot] 不需要旋转 (shouldRotate=NO), rotated=NO");
+            TSLog(LOG_NOTICE, "[TrollShot] 不需要旋转 (shouldRotate=NO), rotated=NO");
         }
     } else {
-        syslog(LOG_ERR, "[TrollShot] cgImage 为 NULL! createCGImage 失败");
+        TSLog(LOG_ERR, "[TrollShot] cgImage 为 NULL! createCGImage 失败");
     }
 
     NSData *jpegData = nil;
@@ -231,13 +237,13 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
                 if (croppedImage) {
                     CGImageRelease(cgImage);
                     cgImage = croppedImage;
-                    syslog(LOG_NOTICE, "[TrollShot] 裁剪区域: (%.0f,%.0f) %.0fx%.0f -> 最终: %zux%zu",
+                    TSLog(LOG_NOTICE, "[TrollShot] 裁剪区域: (%.0f,%.0f) %.0fx%.0f -> 最终: %zux%zu",
                            clampedRect.origin.x, clampedRect.origin.y,
                            clampedRect.size.width, clampedRect.size.height,
                            CGImageGetWidth(cgImage), CGImageGetHeight(cgImage));
                 }
             } else {
-                syslog(LOG_ERR, "[TrollShot] 裁剪区域超出图像范围，跳过裁剪");
+                TSLog(LOG_ERR, "[TrollShot] 裁剪区域超出图像范围，跳过裁剪");
                 hasCrop = NO;
             }
         }
