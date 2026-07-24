@@ -132,46 +132,15 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
     CIImage *ciImage = [CIImage imageWithCVPixelBuffer:pixelBuffer];
 
     /* 方向校正：
-     * 1) 优先根据 UIDevice 方向判断横屏；
-     * 2) 如果设备方向不可靠（常见：游戏强制横屏但设备仍报告竖屏），
-     *    并且缓冲区高度大于宽度，说明横屏游戏画面被装在竖屏缓冲区内，
-     *    兜底顺时针旋转90度，使文字/画面恢复正常可读方向。
+     * daemon 进程无法可靠获取 UIDeviceOrientation，因此直接按缓冲区尺寸判断：
+     * 缓冲区高度 > 宽度（竖屏形状）时，说明横屏游戏画面被装在竖屏缓冲区内，
+     * 顺时针旋转90度使画面恢复正常可读方向。
      */
     size_t pWidth = CVPixelBufferGetWidth(pixelBuffer);
     size_t pHeight = CVPixelBufferGetHeight(pixelBuffer);
-    UIDeviceOrientation orientation = [UIDevice currentDevice].orientation;
 
-    BOOL rotateClockwise = NO;      // 顺时针 90°
-    BOOL rotateCounterClockwise = NO; // 逆时针 90°
-
-    switch (orientation) {
-        case UIDeviceOrientationLandscapeLeft:
-            rotateClockwise = YES;
-            break;
-        case UIDeviceOrientationLandscapeRight:
-            rotateCounterClockwise = YES;
-            break;
-        case UIDeviceOrientationPortraitUpsideDown:
-            ciImage = [ciImage imageByApplyingTransform:CGAffineTransformMakeRotation(M_PI)];
-            break;
-        case UIDeviceOrientationPortrait:
-        case UIDeviceOrientationFaceUp:
-        case UIDeviceOrientationFaceDown:
-        case UIDeviceOrientationUnknown:
-        default:
-            if (pHeight > pWidth) {
-                /* 横屏游戏常见情况：竖屏缓冲区，画面逆时针歪了，顺时针转正 */
-                rotateClockwise = YES;
-            }
-            break;
-    }
-
-    if (rotateClockwise) {
-        /* 顺时针 90°，并平移使 extent 回到正坐标 */
-        CGAffineTransform t = CGAffineTransformMake(0, -1, 1, 0, 0, pWidth);
-        ciImage = [ciImage imageByApplyingTransform:t];
-    } else if (rotateCounterClockwise) {
-        /* 逆时针 90° */
+    if (pHeight > pWidth) {
+        /* 顺时针 90°：top→right, (x,y)→(H-y, x) */
         CGAffineTransform t = CGAffineTransformMake(0, 1, -1, 0, pHeight, 0);
         ciImage = [ciImage imageByApplyingTransform:t];
     }
