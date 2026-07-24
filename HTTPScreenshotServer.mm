@@ -11,6 +11,7 @@
 #import "ScreenCapturer.h"
 #import "TSLogger.h"
 
+#import <CoreGraphics/CoreGraphics.h>
 #import <arpa/inet.h>
 #import <netinet/in.h>
 #import <pthread.h>
@@ -121,7 +122,10 @@ static void HandleClientConnection(int client) {
         }
 
         [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"开始截图... rotate=%d crop=%@",
-            doRotate, CGRectIsEmpty(cropRect) ? @"无" : NSStringFromRect(cropRect)]];
+            doRotate, CGRectIsEmpty(cropRect) ? @"无" : [NSString stringWithFormat:@"%.0f,%.0f,%.0f,%.0f",
+                cropRect.origin.x, cropRect.origin.y,
+                cropRect.origin.x + cropRect.size.width,
+                cropRect.origin.y + cropRect.size.height]]];
         NSError *captureError = nil;
         NSData *jpeg = [[ScreenCapturer sharedCapturer] captureJPEGWithQuality:0.85 rotate:doRotate cropRect:cropRect error:&captureError];
         if (captureError) {
