@@ -178,7 +178,7 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
                     shouldRotate = YES;
                 }
             } @catch (NSException *e) {
-                syslog(LOG_ERR, "[TrollShot] FBSOrientationObserver 异常: %@", e.reason);
+                syslog(LOG_ERR, "[TrollShot] FBSOrientationObserver exception: %s", [e.reason UTF8String]);
             }
         }
 

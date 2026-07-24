@@ -51,16 +51,6 @@ static void *HandleClientThread(void *arg) {
  * 导致 HTTP 请求一直等待而转圈。ScreenCapturer 初始化时已将
  * IOSurfaceAccelerator 的 RunLoop Source 挂到主 RunLoop，后续截图可在任意线程同步调用。
  */
-static NSData *CaptureJPEG(void) {
-    __block NSData *data = nil;
-    __block NSError *error = nil;
-    data = [[ScreenCapturer sharedCapturer] captureJPEGWithQuality:0.85 error:&error];
-    if (error) {
-        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"截图失败: %@", error.localizedDescription]];
-    }
-    return data;
-}
-
 static void SendResponse(int client, int statusCode, NSString *contentType, NSData *body) {
     NSString *statusLine = nil;
     switch (statusCode) {
