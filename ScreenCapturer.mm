@@ -15,6 +15,7 @@
 #import "ScreenCapturer.h"
 #import "IOSurfaceSPI.h"
 #import "UIScreen+Private.h"
+#import "FBSOrientationObserver.h"
 
 /* 诊断全局变量 */
 size_t g_lastOrigWidth = 0;
@@ -145,10 +146,11 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
     CVPixelBufferRelease(pixelBuffer);
 
     /*
-     * 方向校正（CGContext 手动旋转，不依赖 CIImage transform）：
-     * daemon 进程无法可靠获取 UIDeviceOrientation，因此直接按图像尺寸判断。
-     * 缓冲区高度 > 宽度（竖屏形状）时，说明横屏游戏画面被装在竖屏缓冲区内，
-     * 用 CGContext 顺时针旋转90度，输出 1334x750 横屏 JPEG。
+     * 方向校正（CGContext 手动旋转）：
+     * 使用 FBSOrientationObserver（FrontBoardServices 私有框架）获取当前设备方向。
+     * rotate=YES 时强制旋转（手动覆盖，如 ?rotate=1）；
+     * rotate=NO 时自动检测：横屏(Landscape)则旋转，竖屏(Portrait)则不旋转。
+     * 参考 TrollVNC 的 setupOrientationObserver 方案。
      */
     g_lastRotated = NO;
     g_lastOrigWidth = 0;
@@ -164,9 +166,25 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
         g_lastFinalWidth = imgWidth;
         g_lastFinalHeight = imgHeight;
 
-        syslog(LOG_NOTICE, "[TrollShot] 原始图像尺寸: %zux%zu", imgWidth, imgHeight);
+        /* 自动检测当前设备方向 */
+        BOOL shouldRotate = rotate; /* rotate=YES 强制旋转 */
+        if (!shouldRotate) {
+            @try {
+                FBSOrientationObserver *observer = [[FBSOrientationObserver alloc] init];
+                UIInterfaceOrientation orientation = [observer activeInterfaceOrientation];
+                syslog(LOG_NOTICE, "[TrollShot] FBSOrientationObserver: orientation=%ld", (long)orientation);
+                if (orientation == UIInterfaceOrientationLandscapeLeft ||
+                    orientation == UIInterfaceOrientationLandscapeRight) {
+                    shouldRotate = YES;
+                }
+            } @catch (NSException *e) {
+                syslog(LOG_ERR, "[TrollShot] FBSOrientationObserver 异常: %@", e.reason);
+            }
+        }
 
-        if (rotate && imgHeight > imgWidth) {
+        syslog(LOG_NOTICE, "[TrollShot] 原始图像尺寸: %zux%zu, shouldRotate=%d", imgWidth, imgHeight, shouldRotate);
+
+        if (shouldRotate && imgHeight > imgWidth) {
             /* 顺时针90°: 平移+旋转，输出宽高互换 */
             CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
             CGContextRef ctx = CGBitmapContextCreate(NULL,
@@ -193,7 +211,7 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
                 syslog(LOG_ERR, "[TrollShot] CGBitmapContextCreate 失败! ctx=NULL");
             }
         } else {
-            syslog(LOG_NOTICE, "[TrollShot] 不需要旋转 (height<=width), rotated=NO");
+            syslog(LOG_NOTICE, "[TrollShot] 不需要旋转 (shouldRotate=NO), rotated=NO");
         }
     } else {
         syslog(LOG_ERR, "[TrollShot] cgImage 为 NULL! createCGImage 失败");
