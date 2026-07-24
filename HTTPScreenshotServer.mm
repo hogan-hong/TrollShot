@@ -15,6 +15,7 @@
 #import <netinet/in.h>
 #import <pthread.h>
 #import <string.h>
+#import <stdio.h>
 #import <sys/socket.h>
 #import <unistd.h>
 
@@ -94,13 +95,22 @@ static void HandleClientConnection(int client) {
 
         [[TSLogger sharedLogger] log:@"收到 HTTP 请求"];
 
-        /* 解析 URL 查询参数，支持 /screenshot?rotate=1 */
+        /* 解析 URL 查询参数：rotate=1 强制旋转，crop=x1,y1,x2,y2 裁剪区域 */
         BOOL doRotate = NO;
+        CGRect cropRect = CGRectZero;
         if (strncmp(buf, "GET /screenshot", 15) == 0) {
             /* 检查是否有 rotate=1 参数 */
-            char *query = strstr(buf, "rotate=1");
-            if (query) {
+            if (strstr(buf, "rotate=1")) {
                 doRotate = YES;
+            }
+            /* 解析 crop=x1,y1,x2,y2 参数（左上角x,y + 右下角x,y） */
+            char *cropStr = strstr(buf, "crop=");
+            if (cropStr) {
+                int cx1 = -1, cy1 = -1, cx2 = -1, cy2 = -1;
+                int parsed = sscanf(cropStr + 5, "%d,%d,%d,%d", &cx1, &cy1, &cx2, &cy2);
+                if (parsed == 4 && cx1 >= 0 && cy1 >= 0 && cx2 > cx1 && cy2 > cy1) {
+                    cropRect = CGRectMake(cx1, cy1, cx2 - cx1, cy2 - cy1);
+                }
             }
         } else {
             NSData *empty = [NSData data];
@@ -110,9 +120,10 @@ static void HandleClientConnection(int client) {
             return;
         }
 
-        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"开始截图... rotate=%d", doRotate]];
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"开始截图... rotate=%d crop=%@",
+            doRotate, CGRectIsEmpty(cropRect) ? @"无" : NSStringFromRect(cropRect)]];
         NSError *captureError = nil;
-        NSData *jpeg = [[ScreenCapturer sharedCapturer] captureJPEGWithQuality:0.85 rotate:doRotate error:&captureError];
+        NSData *jpeg = [[ScreenCapturer sharedCapturer] captureJPEGWithQuality:0.85 rotate:doRotate cropRect:cropRect error:&captureError];
         if (captureError) {
             [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"截图失败: %@", captureError.localizedDescription]];
         }
@@ -133,6 +144,14 @@ static void HandleClientConnection(int client) {
         [header appendFormat:@"X-Orig-Size: %zux%zu\r\n", g_lastOrigWidth, g_lastOrigHeight];
         [header appendFormat:@"X-Final-Size: %zux%zu\r\n", g_lastFinalWidth, g_lastFinalHeight];
         [header appendFormat:@"X-Rotated: %s\r\n", g_lastRotated ? "YES" : "NO"];
+        if (!CGRectIsEmpty(cropRect)) {
+            [header appendFormat:@"X-Crop: %.0f,%.0f,%.0f,%.0f\r\n",
+                cropRect.origin.x, cropRect.origin.y,
+                cropRect.origin.x + cropRect.size.width,
+                cropRect.origin.y + cropRect.size.height];
+        } else {
+            [header appendString:@"X-Crop: none\r\n"];
+        }
         [header appendString:@"Connection: close\r\n"];
         [header appendString:@"Cache-Control: no-store\r\n"];
         [header appendString:@"\r\n"];

@@ -26,8 +26,11 @@ extern BOOL g_lastRotated;
 + (instancetype)new NS_UNAVAILABLE;
 - (instancetype)init NS_UNAVAILABLE;
 
-/** 截取当前屏幕并编码为 JPEG。quality 范围为 0..1。rotate 为 YES 时顺时针旋转90度。 */
-- (nullable NSData *)captureJPEGWithQuality:(CGFloat)quality rotate:(BOOL)rotate error:(NSError **)error;
+/** 截取当前屏幕并编码为 JPEG。
+ *  quality 范围为 0..1。rotate 为 YES 时强制旋转90度。
+ *  cropRect 非空时只裁剪指定区域（基于旋转后的最终图像坐标）。
+ *  cropRect 传 CGRectZero 表示不裁剪，返回全屏。 */
+- (nullable NSData *)captureJPEGWithQuality:(CGFloat)quality rotate:(BOOL)rotate cropRect:(CGRect)cropRect error:(NSError **)error;
 
 @end
 

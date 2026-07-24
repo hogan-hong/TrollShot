@@ -104,7 +104,7 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
     return self;
 }
 
-- (NSData *)captureJPEGWithQuality:(CGFloat)quality rotate:(BOOL)rotate error:(NSError **)error {
+- (NSData *)captureJPEGWithQuality:(CGFloat)quality rotate:(BOOL)rotate cropRect:(CGRect)cropRect error:(NSError **)error {
     if (quality < 0.0)
         quality = 0.0;
     if (quality > 1.0)
@@ -219,6 +219,29 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
 
     NSData *jpegData = nil;
     if (cgImage) {
+        /* 裁剪：基于旋转后的最终图像坐标，cropRect 非空时裁剪指定区域 */
+        BOOL hasCrop = !CGRectIsEmpty(cropRect);
+        if (hasCrop) {
+            size_t finalW = CGImageGetWidth(cgImage);
+            size_t finalH = CGImageGetHeight(cgImage);
+            CGRect imageRect = CGRectMake(0, 0, finalW, finalH);
+            CGRect clampedRect = CGRectIntersection(cropRect, imageRect);
+            if (!CGRectIsEmpty(clampedRect)) {
+                CGImageRef croppedImage = CGImageCreateWithImageInRect(cgImage, clampedRect);
+                if (croppedImage) {
+                    CGImageRelease(cgImage);
+                    cgImage = croppedImage;
+                    syslog(LOG_NOTICE, "[TrollShot] 裁剪区域: (%.0f,%.0f) %.0fx%.0f -> 最终: %zux%zu",
+                           clampedRect.origin.x, clampedRect.origin.y,
+                           clampedRect.size.width, clampedRect.size.height,
+                           CGImageGetWidth(cgImage), CGImageGetHeight(cgImage));
+                }
+            } else {
+                syslog(LOG_ERR, "[TrollShot] 裁剪区域超出图像范围，跳过裁剪");
+                hasCrop = NO;
+            }
+        }
+
         NSMutableData *data = [NSMutableData data];
         /* 用 Uniform Type Identifier public.jpeg 作为图像格式 */
         CGImageDestinationRef dest = CGImageDestinationCreateWithData((__bridge CFMutableDataRef)data, CFSTR("public.jpeg"), 1, NULL);
