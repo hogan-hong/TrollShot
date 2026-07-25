@@ -121,24 +121,27 @@ iPhone 物理截屏像素固定为 750x1334（竖屏），横屏游戏时自动�
 App 界面提供「调试模式」开关按钮：
 
 - **关闭调试模式（默认）**：daemon 的 stdout/stderr 重定向到 /dev/null 丢弃，TSLogger 不写文件，日志文件不会增长。
-- **开启调试模式**：daemon 带 `--debug` 参数启动，stdout/stderr 重定向到 `/var/mobile/trollshot/trollshotd.log`，TSLogger 写入运行日志。开启时可选择清空旧日志。
+- **开启调试模式**：daemon 带 `--debug` 参数启动，stdout/stderr 重定向到 `/var/mobile/trollshot/trollshotd.log`，TSLogger 写入 `/var/mobile/Documents/TrollShot.log`。开启时可选择清空旧日志。
 
 调试模式状态持久化在 `/var/mobile/trollshot/debug_mode` 标志文件中（内容为 `1` 或 `0`）。切换调试模式时，如果服务正在运行，会自动重启 daemon 使设置立即生效。
+
+## 日志
+
+调试模式开启时，会产生两个日志文件：
+
+| 日志文件 | 路径 | 说明 |
+|----------|------|------|
+| daemon 标准输出 | `/var/mobile/trollshot/trollshotd.log` | daemon 进程的 stdout/stderr 重定向输出（posix_spawn dup2） |
+| TSLogger 运行日志 | `/var/mobile/Documents/TrollShot.log` | ScreenCapturer 中 TSLog 宏写入的结构化日志（带时间戳） |
+
+两个日志文件都只在调试模式开启时才会写入。关闭调试模式后不会产生新的日志内容。
+
+可以通过 SSH 或文件管理工具导出日志进行排查。
 
 ## 停止与卸载
 
 - 点击"停止服务"：向 `trollshotd` 进程发送 SIGTERM，1 秒内未退出则发送 SIGKILL。
-- 卸载 IPA：系统会自动删除 app bundle，已复制到 `/var/mobile/trollshot/` 的 daemon 和日志不会自动清理，可手动删除。
-
-## 日志
-
-daemon 运行日志位于：
-
-```
-/var/mobile/trollshot/trollshotd.log
-```
-
-可以通过 SSH 或文件管理工具导出该日志进行排查。
+- 卸载 IPA：系统会自动删除 app bundle，已复制到 `/var/mobile/trollshot/` 的 daemon、日志和 `/var/mobile/Documents/TrollShot.log` 不会自动清理，可手动删除。
 
 ## 局限
 
@@ -149,12 +152,27 @@ daemon 运行日志位于：
 
 ## 文件说明
 
+### 核心源码
+
 - `ScreenCapturer.{h,mm}` - 通过私有 API 截屏，包含旋转（FBSOrientationObserver）和裁剪逻辑
 - `HTTPScreenshotServer.{h,mm}` - 迷你 HTTP 服务器，解析 `rotate` / `crop` 查询参数
-- `trollshotd.mm` - 后台 daemon 入口
-- `TrollShotManager.{h,m}` - 启动/停止 daemon 的管理逻辑
-- `AppDelegate.{h,m}` / `main.m` - iOS 应用启动入口
-- `include-spi/` - 私有框架的最小声明（含 `FBSOrientationObserver.h`，来自 TrollVNC）
-- `layout/Library/LaunchDaemons/com.hogan.trollshot.plist` - 可选的 launchd 配置
-- `TrollShot.entitlements` - 必需的 entitlement
+- `trollshotd.mm` - 后台 daemon 入口，解析 `--debug` 参数
+- `TrollShotManager.{h,m}` - 启动/停止 daemon 的管理逻辑，调试模式标志读写，stdout/stderr 重定向控制
+- `TSLogger.{h,m}` - 日志管理器，懒加载写入 `/var/mobile/Documents/TrollShot.log`，受 `debugEnabled` 控制
+- `AppDelegate.{h,m}` / `main.m` - iOS 应用启动入口，含调试模式开关按钮
+
+### 私有框架声明
+
+- `include-spi/FBSOrientationObserver.h` - FrontBoardServices 方向观察器（来自 TrollVNC）
+- `include-spi/IOKitSPI.h` - IOKit 私有接口声明
+- `include-spi/IOSurfaceSPI.h` - IOSurface 私有接口声明
+- `include-spi/UIScreen+Private.h` - UIScreen 私有方法声明
+
+### 构建与配置
+
 - `Makefile` - Theos 构建配置（链接 FrontBoardServices 私有框架）
+- `control` - Theos 包控制文件（包名、版本、依赖）
+- `TrollShot.entitlements` - 必需的私有 entitlement（`com.apple.private.security.no-container` 等）
+- `Info.plist` - 应用配置
+- `layout/Library/LaunchDaemons/com.hogan.trollshot.plist` - 可选的 launchd 配置（开机自启）
+- `Resources/` - 应用图标资源
