@@ -70,8 +70,9 @@ int main(int argc, const char *argv[]) {
         pthread_detach(serverThread);
 
         /* 主线程保持 runloop 运转，供 ScreenCapturer 的 IOSurfaceAccelerator RunLoop Source 使用。
-         * 直接用 CFRunLoopRun() 而不是循环调用 CFRunLoopRunInMode，
-         * 确保 GCD 主队列和 RunLoop Source 都能正常处理。 */
+         * CFRunLoopRun() 在 runloop 上没有任何 source/timer 时会立即返回导致进程退出，
+         * 所以先添加一个空的 NSMachPort 保持 runloop alive。 */
+        [[NSRunLoop currentRunLoop] addPort:[NSMachPort port] forMode:NSDefaultRunLoopMode];
         CFRunLoopRun();
 
         if (gDebug) {
