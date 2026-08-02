@@ -250,9 +250,20 @@ extern "C" void StartScreenshotServer(uint16_t port) {
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    if (bind(serverSocket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        NSLog(@"[TrollShot] bind() 失败: %s (errno=%d)", strerror(errno), errno);
-        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"端口 %d 绑定失败", port]];
+    /* bind 重试：端口可能被旧进程占用，等待释放后重试 */
+    BOOL bindOK = NO;
+    for (int retry = 0; retry < 10; retry++) {
+        if (bind(serverSocket, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+            bindOK = YES;
+            break;
+        }
+        NSLog(@"[TrollShot] bind() 失败(重试 %d/10): %s (errno=%d)", retry + 1, strerror(errno), errno);
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"端口 %d 绑定失败(重试 %d/10)", port, retry + 1]];
+        usleep(300000); /* 300ms */
+    }
+    if (!bindOK) {
+        NSLog(@"[TrollShot] bind() 最终失败，放弃: %s", strerror(errno));
+        [[TSLogger sharedLogger] log:@"端口绑定失败，10次重试后放弃"];
         close(serverSocket);
         return;
     }

@@ -208,9 +208,14 @@
     return YES;
 }
 
-/* 直接启动 daemon 进程 */
+/* 直接启动 daemon 进程（从 .app bundle 内运行，保持代码签名有效） */
 - (BOOL)launchDaemonProcess:(NSError **)error {
-    NSString *daemonPath = [self installedDaemonPath];
+    /* 优先使用 .app bundle 内的 daemon（签名有效），避免复制到外部路径被 AMFI 杀掉 */
+    NSString *daemonPath = [self bundledDaemonPath];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:daemonPath]) {
+        /* 兜底：使用已安装路径（旧版本兼容） */
+        daemonPath = [self installedDaemonPath];
+    }
     const char *cPath = [daemonPath fileSystemRepresentation];
 
     /* 根据调试模式标志决定启动参数 */
@@ -274,6 +279,28 @@
     }
 
     [self savePid:pid];
+
+    /* 检查进程是否立即崩溃（AMFI 代码签名杀进程） */
+    [NSThread sleepForTimeInterval:0.2];
+    int status = 0;
+    pid_t waitResult = waitpid(pid, &status, WNOHANG);
+    if (waitResult != 0) {
+        /* 进程已退出 */
+        NSString *crashReason;
+        if (WIFSIGNALED(status)) {
+            crashReason = [NSString stringWithFormat:@"trollshotd 被信号 %d 杀死（可能是代码签名/AMFI拒绝）", WTERMSIG(status)];
+        } else {
+            crashReason = [NSString stringWithFormat:@"trollshotd 退出码 %d", WEXITSTATUS(status)];
+        }
+        NSLog(@"[TrollShot] %@", crashReason);
+        if (error) {
+            *error = [NSError errorWithDomain:@"TrollShot"
+                                         code:3004
+                                     userInfo:@{NSLocalizedDescriptionKey : crashReason}];
+        }
+        return NO;
+    }
+
     return YES;
 }
 
@@ -300,10 +327,11 @@
         return NO;
     }
 
-    /* TrollStore 环境：手动安装并启动 daemon */
-    if (!self.isDaemonInstalled) {
-        if (![self installDaemon:error]) return NO;
-    }
+    /* TrollStore 环境：直接从 .app bundle 启动 daemon（不复制到外部路径，保持签名有效） */
+
+    /* 先清理可能残留的旧 trollshotd 进程（之前版本复制到 /var/mobile/trollshot/ 的） */
+    [self killDaemonProcesses];
+    [NSThread sleepForTimeInterval:0.3];
 
     if (self.isDaemonRunning) return YES;
 
