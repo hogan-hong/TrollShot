@@ -25,8 +25,10 @@ include $(THEOS_MAKE_PATH)/tool.mk
 
 # 打包前把 daemon 二进制和 launchd plist 复制进 .app bundle，
 # 这样 TrollShotManager 才能从 [NSBundle mainBundle] 里找到它们。
+# 同时确保 Info.plist 被复制进 .app bundle（Theos 有时不会自动处理）。
 before-package::
 	@mkdir -p "$(THEOS_STAGING_DIR)/Applications/TrollShot.app"
+	@cp -p Info.plist "$(THEOS_STAGING_DIR)/Applications/TrollShot.app/Info.plist"
 	@if [ -f "$(THEOS_OBJ_DIR)/trollshotd" ]; then \
 		cp -p "$(THEOS_OBJ_DIR)/trollshotd" "$(THEOS_STAGING_DIR)/Applications/TrollShot.app/trollshotd"; \
 	elif [ -f "$(THEOS_OBJ_DIR)/debug/trollshotd" ]; then \

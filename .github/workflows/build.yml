@@ -53,14 +53,28 @@ jobs:
       - name: 打包 IPA
         run: |
           set -e
+          # 验证 staging .app 中包含 Info.plist
+          if [ ! -f ".theos/_/Applications/TrollShot.app/Info.plist" ]; then
+            echo "❌ Info.plist 不在 .app bundle 中！手动复制..."
+            cp -p Info.plist ".theos/_/Applications/TrollShot.app/Info.plist"
+          fi
           # 从 staging 目录拿出 .app，按 TrollStore 标准打包成 Payload/*.app
           mkdir -p Payload
           cp -R .theos/_/Applications/TrollShot.app Payload/
+          # 验证 Info.plist 已复制
+          if [ ! -f "Payload/TrollShot.app/Info.plist" ]; then
+            echo "❌ Payload/TrollShot.app/Info.plist 仍缺失！"
+            exit 1
+          fi
+          echo "✅ Info.plist 验证通过"
           # TrollStore 安装时需要可执行权限
           chmod -R +x Payload/TrollShot.app
           zip -yqr TrollShot.ipa Payload
           rm -rf Payload
           ls -lh TrollShot.ipa
+          # 列出 IPA 内容确认结构
+          echo "=== IPA 内容 ==="
+          python3 -c "import zipfile; [print(n) for n in zipfile.ZipFile('TrollShot.ipa').namelist()]"
 
       - name: 上传构建日志
         if: always()
