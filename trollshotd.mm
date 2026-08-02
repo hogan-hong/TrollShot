@@ -37,7 +37,9 @@ static void onSignal(int sig) {
 
 /* HTTP 服务独立线程入口，不依赖 GCD */
 static void *ServerThreadEntry(void *arg) {
+    NSLog(@"[TrollShot] HTTP 服务线程入口");
     StartScreenshotServer(gPort);
+    NSLog(@"[TrollShot] HTTP 服务线程退出（不应发生）");
     return NULL;
 }
 
@@ -66,14 +68,19 @@ int main(int argc, const char *argv[]) {
 
         /* HTTP 服务在独立 pthread 中运行，避免阻塞主 runloop，同时不依赖 GCD */
         pthread_t serverThread;
-        pthread_create(&serverThread, NULL, ServerThreadEntry, NULL);
-        pthread_detach(serverThread);
+        int ptRet = pthread_create(&serverThread, NULL, ServerThreadEntry, NULL);
+        NSLog(@"[TrollShot] pthread_create 返回 %d", ptRet);
+        if (ptRet == 0) {
+            pthread_detach(serverThread);
+        }
 
         /* 主线程保持 runloop 运转，供 ScreenCapturer 的 IOSurfaceAccelerator RunLoop Source 使用。
          * CFRunLoopRun() 在 runloop 上没有任何 source/timer 时会立即返回导致进程退出，
          * 所以先添加一个空的 NSMachPort 保持 runloop alive。 */
         [[NSRunLoop currentRunLoop] addPort:[NSMachPort port] forMode:NSDefaultRunLoopMode];
+        NSLog(@"[TrollShot] 进入 CFRunLoopRun()");
         CFRunLoopRun();
+        NSLog(@"[TrollShot] CFRunLoopRun 返回（不应发生）");
 
         if (gDebug) {
             NSLog(@"[TrollShot] trollshotd 退出");

@@ -17,6 +17,7 @@
 #import <pthread.h>
 #import <string.h>
 #import <stdio.h>
+#import <errno.h>
 #import <sys/socket.h>
 #import <sys/wait.h>
 #import <unistd.h>
@@ -229,13 +230,16 @@ static void HandleClientConnection(int client) {
 }
 
 extern "C" void StartScreenshotServer(uint16_t port) {
+    NSLog(@"[TrollShot] StartScreenshotServer 开始, port=%d", port);
     [[TSLogger sharedLogger] log:@"HTTP 服务线程启动"];
 
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (serverSocket < 0) {
+        NSLog(@"[TrollShot] socket() 失败: %s", strerror(errno));
         [[TSLogger sharedLogger] log:@"创建 socket 失败"];
         return;
     }
+    NSLog(@"[TrollShot] socket() OK: fd=%d", serverSocket);
 
     int yes = 1;
     setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
@@ -247,26 +251,32 @@ extern "C" void StartScreenshotServer(uint16_t port) {
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     if (bind(serverSocket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        NSLog(@"[TrollShot] bind() 失败: %s (errno=%d)", strerror(errno), errno);
         [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"端口 %d 绑定失败", port]];
         close(serverSocket);
         return;
     }
+    NSLog(@"[TrollShot] bind() OK");
 
     if (listen(serverSocket, 128) < 0) {
+        NSLog(@"[TrollShot] listen() 失败: %s", strerror(errno));
         [[TSLogger sharedLogger] log:@"监听失败"];
         close(serverSocket);
         return;
     }
+    NSLog(@"[TrollShot] listen() OK - 端口 %d 就绪", port);
 
     [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"HTTP 服务器已在端口 %d 监听，最大并发 %d", port, kMaxConcurrentRequests]];
 
     gConcurrencySem = dispatch_semaphore_create(kMaxConcurrentRequests);
     if (!gConcurrencySem) {
+        NSLog(@"[TrollShot] dispatch_semaphore_create 失败");
         [[TSLogger sharedLogger] log:@"初始化并发控制信号量失败"];
         close(serverSocket);
         return;
     }
 
+    NSLog(@"[TrollShot] 进入 accept 循环");
     while (1) {
         int client = accept(serverSocket, NULL, NULL);
         if (client < 0)
