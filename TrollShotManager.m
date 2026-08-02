@@ -523,9 +523,52 @@
     }
 }
 
-/* 兜底结束 trollshotd 进程 */
+/* 兜底结束 trollshotd 进程：HTTP /shutdown -> kill PID -> killall 三重清理 */
 - (BOOL)killDaemonProcesses {
-    return [self spawnCommand:@"/usr/bin/killall" arguments:@[@"-9", kDaemonName]] == 0;
+    NSLog(@"[TrollShot] 开始清理旧 daemon 进程...");
+
+    /* 1. 尝试 HTTP /shutdown（新版 daemon 支持） */
+    if ([self sendShutdownRequest]) {
+        NSLog(@"[TrollShot] HTTP /shutdown 已发送，等待旧 daemon 退出...");
+        [NSThread sleepForTimeInterval:1.0];
+    }
+
+    /* 2. 按 PID 文件直接 kill */
+    pid_t pid = [self readSavedPid];
+    if (pid > 0) {
+        NSLog(@"[TrollShot] 从 PID 文件读取到 pid=%d，发送 SIGKILL", pid);
+        kill(pid, SIGKILL);
+        [NSThread sleepForTimeInterval:0.3];
+    }
+
+    /* 3. killall 兜底（尝试多个路径） */
+    int ret1 = [self spawnCommand:@"/usr/bin/killall" arguments:@[@"-9", kDaemonName]];
+    NSLog(@"[TrollShot] /usr/bin/killall -9 返回 %d", ret1);
+    if (ret1 != 0) {
+        int ret2 = [self spawnCommand:@"/bin/killall" arguments:@[@"-9", kDaemonName]];
+        NSLog(@"[TrollShot] /bin/killall -9 返回 %d", ret2);
+    }
+
+    /* 4. 等待端口释放 */
+    [NSThread sleepForTimeInterval:0.5];
+
+    /* 5. 验证端口是否已释放 */
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd >= 0) {
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(kListenPort);
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        int canConnect = connect(sockfd, (struct sockaddr *)&addr, sizeof(addr));
+        close(sockfd);
+        if (canConnect == 0) {
+            NSLog(@"[TrollShot] 警告：端口 %d 仍被占用！", kListenPort);
+            return NO;
+        }
+        NSLog(@"[TrollShot] 端口 %d 已释放", kListenPort);
+    }
+    return YES;
 }
 
 /* 卸载 daemon */
