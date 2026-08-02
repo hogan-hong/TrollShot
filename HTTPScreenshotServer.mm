@@ -18,7 +18,10 @@
 #import <string.h>
 #import <stdio.h>
 #import <sys/socket.h>
+#import <sys/wait.h>
 #import <unistd.h>
+#import <spawn.h>
+#import <stdlib.h>
 
 /* 最大并发截图请求数，避免高并发时创建过多线程导致系统拒绝连接 */
 static const int kMaxConcurrentRequests = 4;
@@ -84,6 +87,43 @@ static void SendResponse(int client, int statusCode, NSString *contentType, NSDa
     }
 }
 
+/*
+ * daemon 自行关闭：以 root 权限卸载 launchd plist，然后退出进程。
+ * 这样即使 KeepAlive=true，launchd 也不会再重启 daemon。
+ * 越狱环境下 App（mobile 用户）无权 kill root 进程或 unload 系统 plist，
+ * 所以通过 HTTP /shutdown 请求让 daemon 自己来完成。
+ */
+static void *ShutdownThreadEntry(void *arg) {
+    @autoreleasepool {
+        [[TSLogger sharedLogger] log:@"收到关闭请求，开始卸载 launchd..."];
+
+        /* 先 bootout（iOS 14+ 新语法） */
+        pid_t bootoutPid = 0;
+        char *bootoutArgs[] = {(char *)"launchctl", (char *)"bootout", (char *)"system/com.hogan.trollshot", NULL};
+        if (posix_spawn(&bootoutPid, "/bin/launchctl", NULL, NULL, bootoutArgs, NULL) == 0) {
+            int st = 0;
+            waitpid(bootoutPid, &st, 0);
+        }
+
+        /* 再 unload（旧语法兜底，不加 -w 以免永久禁用导致无法重启） */
+        pid_t unloadPid = 0;
+        char *unloadArgs[] = {(char *)"launchctl", (char *)"unload",
+                              (char *)"/Library/LaunchDaemons/com.hogan.trollshot.plist", NULL};
+        if (posix_spawn(&unloadPid, "/bin/launchctl", NULL, NULL, unloadArgs, NULL) == 0) {
+            int st = 0;
+            waitpid(unloadPid, &st, 0);
+        }
+
+        [[TSLogger sharedLogger] log:@"launchd 已卸载，退出 daemon..."];
+
+        /* 等待 HTTP 响应发送完毕 */
+        usleep(150000); /* 150ms */
+
+        exit(0);
+    }
+    return NULL;
+}
+
 static void HandleClientConnection(int client) {
     @autoreleasepool {
         char buf[4096];
@@ -95,6 +135,19 @@ static void HandleClientConnection(int client) {
         buf[n] = '\0';
 
         [[TSLogger sharedLogger] log:@"收到 HTTP 请求"];
+
+        /* /shutdown：daemon 自行卸载 launchd 并退出（越狱环境，root 权限） */
+        if (strncmp(buf, "GET /shutdown", 13) == 0) {
+            const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 18\r\nConnection: close\r\n\r\nShutting down...\n";
+            send(client, resp, strlen(resp), 0);
+            close(client);
+            [[TSLogger sharedLogger] log:@"处理 /shutdown 请求"];
+            /* 在独立线程中执行关闭，确保 HTTP 响应已发送 */
+            pthread_t shutdownThread;
+            pthread_create(&shutdownThread, NULL, ShutdownThreadEntry, NULL);
+            pthread_detach(shutdownThread);
+            return;
+        }
 
         /* 解析 URL 查询参数：rotate=1 强制旋转，crop=x1,y1,x2,y2 裁剪区域 */
         BOOL doRotate = NO;

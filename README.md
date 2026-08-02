@@ -110,6 +110,9 @@ GET /screenshot?crop=0,0,667,750
 
 # 旋转 + 裁剪组合使用
 GET /screenshot?rotate=1&crop=0,0,667,750
+
+# 停止 daemon（越狱环境，daemon 自行卸载 launchd 并退出）
+GET /shutdown
 ```
 
 #### 自动横竖屏检测

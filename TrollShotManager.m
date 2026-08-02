@@ -320,12 +320,38 @@
 
 /* 停止 daemon */
 - (BOOL)stopDaemon:(NSError **)error {
-    /* 先尝试 launchctl unload / bootout，供已通过 .deb 安装 plist 到 LaunchDaemons 的越狱设备使用 */
-    [self spawnLaunchctlUnload];
+    /* 越狱环境：daemon 以 root 运行，App（mobile 用户）无权 kill root 进程
+     * 也无权 unload 系统级 launchd plist。通过 HTTP /shutdown 请求让 daemon
+     * 自行卸载 launchd 并退出。 */
+    if ([[NSFileManager defaultManager] fileExistsAtPath:kSystemPlistPath]) {
+        if ([self isDaemonRunning] && [self sendShutdownRequest]) {
+            /* 等待 daemon 自行关闭（最多 3 秒） */
+            for (int i = 0; i < 30; i++) {
+                if (![self isDaemonRunning]) {
+                    [[NSFileManager defaultManager] removeItemAtPath:[self pidFilePath] error:nil];
+                    return YES;
+                }
+                [NSThread sleepForTimeInterval:0.1];
+            }
+        }
+        /* HTTP 关闭失败或 daemon 仍在运行，尝试 launchctl（可能权限不足） */
+        [self spawnLaunchctlUnload];
+        [NSThread sleepForTimeInterval:0.3];
 
-    /* 等待 launchctl 生效 */
-    [NSThread sleepForTimeInterval:0.3];
+        if (![self isDaemonRunning]) {
+            [[NSFileManager defaultManager] removeItemAtPath:[self pidFilePath] error:nil];
+            return YES;
+        }
 
+        if (error) {
+            *error = [NSError errorWithDomain:@"TrollShot"
+                                         code:3003
+                                     userInfo:@{NSLocalizedDescriptionKey : @"无法停止服务：daemon 以 root 运行，HTTP 关闭请求未成功。请通过 SSH 以 root 执行：\nlaunchctl unload /Library/LaunchDaemons/com.hogan.trollshot.plist"}];
+        }
+        return NO;
+    }
+
+    /* TrollStore 环境：直接 kill（daemon 以当前用户权限运行） */
     pid_t pid = [self readSavedPid];
     if (pid > 0 && kill(pid, 0) == 0) {
         kill(pid, SIGTERM);
@@ -335,23 +361,54 @@
         }
     }
 
-    /* 兜底：查找并结束所有 trollshotd 进程 */
     [self killDaemonProcesses];
-
-    /* 等待端口释放 */
     [NSThread sleepForTimeInterval:0.2];
-
     [[NSFileManager defaultManager] removeItemAtPath:[self pidFilePath] error:nil];
 
-    /* 验证 daemon 是否真正停止（launchd 可能已重启） */
     if ([self isDaemonRunning]) {
         if (error) {
             *error = [NSError errorWithDomain:@"TrollShot"
                                          code:3003
-                                     userInfo:@{NSLocalizedDescriptionKey : @"无法停止服务：daemon 可能由 launchd 管理（KeepAlive），且当前用户权限不足。请通过 SSH 以 root 执行：\nlaunchctl unload /Library/LaunchDaemons/com.hogan.trollshot.plist"}];
+                                     userInfo:@{NSLocalizedDescriptionKey : @"无法停止服务，请稍后重试"}];
         }
         return NO;
     }
+    return YES;
+}
+
+/* 发送 HTTP /shutdown 请求到 daemon，让 root daemon 自行卸载 launchd 并退出 */
+- (BOOL)sendShutdownRequest {
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) return NO;
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(kListenPort);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    /* 设置 2 秒超时，避免 daemon 无响应时卡住 */
+    struct timeval tv = {.tv_sec = 2, .tv_usec = 0};
+    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        close(sockfd);
+        return NO;
+    }
+
+    const char *req = "GET /shutdown HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    ssize_t sent = send(sockfd, req, strlen(req), 0);
+    if (sent <= 0) {
+        close(sockfd);
+        return NO;
+    }
+
+    /* 读取响应（确认 daemon 收到了请求） */
+    char buf[256];
+    recv(sockfd, buf, sizeof(buf) - 1, 0);
+    close(sockfd);
+
     return YES;
 }
 
