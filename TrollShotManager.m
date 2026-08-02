@@ -309,16 +309,40 @@
 
     if (![self launchDaemonProcess:error]) return NO;
 
-    /* 等待 0.5 秒确认服务端口已打开 */
-    for (int i = 0; i < 10; i++) {
+    /* 等待最多 3 秒确认服务端口已打开 */
+    for (int i = 0; i < 60; i++) {
         if ([self isDaemonRunning]) return YES;
         [NSThread sleepForTimeInterval:0.05];
+    }
+
+    /* 检查进程是否已崩溃 */
+    pid_t pid = [self readSavedPid];
+    BOOL crashed = (pid > 0 && kill(pid, 0) != 0);
+
+    /* 读取日志内容，直接显示在错误信息中 */
+    NSString *logPath = [kLogDir stringByAppendingPathComponent:@"trollshotd.log"];
+    NSString *logContent = [NSString stringWithContentsOfFile:logPath
+                                                     encoding:NSUTF8StringEncoding
+                                                        error:nil];
+    NSString *errorMsg;
+    if (crashed) {
+        errorMsg = @"trollshotd 启动后立即崩溃";
+    } else {
+        errorMsg = @"trollshotd 已启动但端口未响应（3秒超时）";
+    }
+    if (logContent.length > 0) {
+        /* 截取最后 500 字符，避免弹窗过长 */
+        NSString *tail = logContent.length > 500 ?
+            [logContent substringFromIndex:logContent.length - 500] : logContent;
+        errorMsg = [NSString stringWithFormat:@"%@\n\n--- 日志 ---\n%@", errorMsg, tail];
+    } else {
+        errorMsg = [NSString stringWithFormat:@"%@\n\n（日志为空，请先开启调试模式再重试）", errorMsg];
     }
 
     if (error) {
         *error = [NSError errorWithDomain:@"TrollShot"
                                      code:3002
-                                 userInfo:@{NSLocalizedDescriptionKey : @"trollshotd 已启动但端口未响应，请检查日志 /var/mobile/trollshot/trollshotd.log"}];
+                                 userInfo:@{NSLocalizedDescriptionKey : errorMsg}];
     }
     return NO;
 }
