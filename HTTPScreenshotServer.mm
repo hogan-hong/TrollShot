@@ -136,6 +136,14 @@ static void HandleClientConnection(int client) {
 
         [[TSLogger sharedLogger] log:@"收到 HTTP 请求"];
 
+        /* /ping：健康检查，返回 pong（供 App 验证 daemon 是否真正运行） */
+        if (strncmp(buf, "GET /ping", 9) == 0) {
+            const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\npong";
+            send(client, resp, strlen(resp), 0);
+            close(client);
+            return;
+        }
+
         /* /shutdown：daemon 自行卸载 launchd 并退出（越狱环境，root 权限） */
         if (strncmp(buf, "GET /shutdown", 13) == 0) {
             const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 18\r\nConnection: close\r\n\r\nShutting down...\n";

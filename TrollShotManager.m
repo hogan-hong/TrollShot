@@ -136,7 +136,7 @@
     return [[NSFileManager defaultManager] fileExistsAtPath:[self installedDaemonPath] isDirectory:&isDir] && !isDir;
 }
 
-/* 通过连接本地端口判断服务是否正在运行 */
+/* 通过 HTTP /ping 请求验证 daemon 是否真正运行（不仅检查端口，还验证响应） */
 - (BOOL)isDaemonRunning {
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) return NO;
@@ -147,16 +147,32 @@
     addr.sin_port = htons(kListenPort);
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-    int result = connect(sockfd, (struct sockaddr *)&addr, sizeof(addr));
-    close(sockfd);
-    if (result == 0) return YES;
+    /* 1 秒超时，避免 UI 卡顿 */
+    struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
+    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-    /* 如果连不上，再检查之前保存的 PID 是否仍存活 */
-    pid_t pid = [self readSavedPid];
-    if (pid > 0 && kill(pid, 0) == 0) {
-        return YES;
+    if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        close(sockfd);
+        return NO;
     }
-    return NO;
+
+    /* 发送 /ping 请求，验证是 trollshotd 而非其他服务 */
+    const char *req = "GET /ping HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n";
+    if (send(sockfd, req, strlen(req), 0) <= 0) {
+        close(sockfd);
+        return NO;
+    }
+
+    char buf[256];
+    memset(buf, 0, sizeof(buf));
+    ssize_t n = recv(sockfd, buf, sizeof(buf) - 1, 0);
+    close(sockfd);
+
+    if (n <= 0) return NO;
+
+    /* 检查响应中是否包含 "pong" */
+    return strstr(buf, "pong") != NULL;
 }
 
 /* 安装 daemon 到 /var/mobile/trollshot */
