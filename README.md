@@ -32,6 +32,19 @@ TrollShot 采用类似 TrollVNC 的后台 daemon 架构：
 
 `layout/Library/LaunchDaemons/com.hogan.trollshot.plist` 仍保留在仓库中，供需要开机自启的高级用户手动放置到 `/Library/LaunchDaemons/`（需要 root 权限）。
 
+### 越狱环境
+
+在越狱设备上通过 `.deb` 安装时，launchd plist 会自动部署到 `/Library/LaunchDaemons/com.hogan.trollshot.plist`，daemon 以 root 身份运行且 `KeepAlive=true`（被杀后自动重启）。
+
+App 会自动检测运行环境：
+- **检测到系统级 plist（越狱）**：启动/停止通过 `launchctl bootstrap`/`bootout` 操作（兼容旧版 `load`/`unload`），不直接 `posix_spawn`
+- **未检测到（TrollStore）**：手动复制 daemon 到 `/var/mobile/trollshot/` 并 `posix_spawn` 启动
+
+> 注意：如果 App 以 mobile 用户运行且 `launchctl` 权限不足，停止服务可能失败。此时会弹出提示，请通过 SSH 以 root 执行：
+> ```
+> launchctl unload /Library/LaunchDaemons/com.hogan.trollshot.plist
+> ```
+
 ## 安装方式
 
 **通过 TrollStore 直接安装 IPA**。
@@ -140,8 +153,9 @@ App 界面提供「调试模式」开关按钮：
 
 ## 停止与卸载
 
-- 点击"停止服务"：向 `trollshotd` 进程发送 SIGTERM，1 秒内未退出则发送 SIGKILL。
-- 卸载 IPA：系统会自动删除 app bundle，已复制到 `/var/mobile/trollshot/` 的 daemon、日志和 `/var/mobile/Documents/TrollShot.log` 不会自动清理，可手动删除。
+- **TrollStore 环境**：点击"停止服务"向 `trollshotd` 进程发送 SIGTERM，1 秒内未退出则发送 SIGKILL，最后 `killall -9` 兜底。
+- **越狱环境**：点击"停止服务"先执行 `launchctl bootout`/`unload` 卸载系统级 plist，再 kill 进程。如果权限不足会弹出错误提示，需通过 SSH 以 root 手动执行 `launchctl unload`。
+- 卸载 IPA/.deb：系统会自动删除 app bundle，已复制到 `/var/mobile/trollshot/` 的 daemon、日志和 `/var/mobile/Documents/TrollShot.log` 不会自动清理，可手动删除。越狱环境还需手动删除 `/Library/LaunchDaemons/com.hogan.trollshot.plist` 并执行 `launchctl unload`。
 
 ## 局限
 

@@ -28,6 +28,7 @@
 #define kLogDir            @"/var/mobile/trollshot"
 #define kListenPort        8080
 #define kDebugFlagFile     @"/var/mobile/trollshot/debug_mode"
+#define kSystemPlistPath   @"/Library/LaunchDaemons/com.hogan.trollshot.plist"
 
 @implementation TrollShotManager
 
@@ -262,6 +263,28 @@
 
 /* 启动 daemon */
 - (BOOL)startDaemon:(NSError **)error {
+    /* 越狱环境：如果系统级 launchd plist 存在，通过 launchctl 加载 */
+    if ([[NSFileManager defaultManager] fileExistsAtPath:kSystemPlistPath]) {
+        /* 先尝试 bootstrap-load（新语法） */
+        int ret = [self spawnCommand:@"/bin/launchctl" arguments:@[@"bootstrap", @"system", kSystemPlistPath]];
+        if (ret != 0) {
+            /* 旧语法兜底 */
+            [self spawnCommand:@"/bin/launchctl" arguments:@[@"load", @"-w", kSystemPlistPath]];
+        }
+        /* 等待端口就绪 */
+        for (int i = 0; i < 10; i++) {
+            if ([self isDaemonRunning]) return YES;
+            [NSThread sleepForTimeInterval:0.1];
+        }
+        if (error) {
+            *error = [NSError errorWithDomain:@"TrollShot"
+                                         code:3002
+                                     userInfo:@{NSLocalizedDescriptionKey : @"launchctl 加载失败，请检查 /var/mobile/trollshot/trollshotd.log"}];
+        }
+        return NO;
+    }
+
+    /* TrollStore 环境：手动安装并启动 daemon */
     if (!self.isDaemonInstalled) {
         if (![self installDaemon:error]) return NO;
     }
@@ -297,8 +320,11 @@
 
 /* 停止 daemon */
 - (BOOL)stopDaemon:(NSError **)error {
-    /* 先尝试 launchctl unload，供已手动放置 plist 到 LaunchDaemons 的用户使用 */
+    /* 先尝试 launchctl unload / bootout，供已通过 .deb 安装 plist 到 LaunchDaemons 的越狱设备使用 */
     [self spawnLaunchctlUnload];
+
+    /* 等待 launchctl 生效 */
+    [NSThread sleepForTimeInterval:0.3];
 
     pid_t pid = [self readSavedPid];
     if (pid > 0 && kill(pid, 0) == 0) {
@@ -309,10 +335,23 @@
         }
     }
 
-    /* 党底：查找并结束所有 trollshotd 进程 */
+    /* 兜底：查找并结束所有 trollshotd 进程 */
     [self killDaemonProcesses];
 
+    /* 等待端口释放 */
+    [NSThread sleepForTimeInterval:0.2];
+
     [[NSFileManager defaultManager] removeItemAtPath:[self pidFilePath] error:nil];
+
+    /* 验证 daemon 是否真正停止（launchd 可能已重启） */
+    if ([self isDaemonRunning]) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"TrollShot"
+                                         code:3003
+                                     userInfo:@{NSLocalizedDescriptionKey : @"无法停止服务：daemon 可能由 launchd 管理（KeepAlive），且当前用户权限不足。请通过 SSH 以 root 执行：\nlaunchctl unload /Library/LaunchDaemons/com.hogan.trollshot.plist"}];
+        }
+        return NO;
+    }
     return YES;
 }
 
@@ -343,11 +382,19 @@
     return -1;
 }
 
-/* 尝试 launchctl unload */
+/* 尝试 launchctl unload / bootout，同时检查系统路径和用户路径 */
 - (void)spawnLaunchctlUnload {
-    NSString *plistPath = [self installedPlistPath];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:plistPath]) {
-        [self spawnCommand:@"/bin/launchctl" arguments:@[@"unload", @"-w", plistPath]];
+    /* 系统级 plist（.deb 安装到越狱设备时在此路径） */
+    if ([[NSFileManager defaultManager] fileExistsAtPath:kSystemPlistPath]) {
+        /* 先尝试 bootout（iOS 14+ 新语法） */
+        [self spawnCommand:@"/bin/launchctl" arguments:@[@"bootout", @"system/com.hogan.trollshot"]];
+        /* 再尝试 unload（旧语法，兜底） */
+        [self spawnCommand:@"/bin/launchctl" arguments:@[@"unload", @"-w", kSystemPlistPath]];
+    }
+    /* 用户级 plist（App 手动复制到 /var/mobile/trollshot/ 的情况） */
+    NSString *userPlist = [self installedPlistPath];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:userPlist]) {
+        [self spawnCommand:@"/bin/launchctl" arguments:@[@"unload", @"-w", userPlist]];
     }
 }
 
