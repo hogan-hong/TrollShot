@@ -98,26 +98,11 @@ static void SendResponse(int client, int statusCode, NSString *contentType, NSDa
  */
 static void *ShutdownThreadEntry(void *arg) {
     @autoreleasepool {
-        [[TSLogger sharedLogger] log:@"收到关闭请求，开始卸载 launchd..."];
+        [[TSLogger sharedLogger] log:@"收到关闭请求，写入停止标志并退出..."];
 
-        /* 先 bootout（iOS 14+ 新语法） */
-        pid_t bootoutPid = 0;
-        char *bootoutArgs[] = {(char *)"launchctl", (char *)"bootout", (char *)"system/com.hogan.trollshot", NULL};
-        if (posix_spawn(&bootoutPid, "/bin/launchctl", NULL, NULL, bootoutArgs, NULL) == 0) {
-            int st = 0;
-            waitpid(bootoutPid, &st, 0);
-        }
-
-        /* 再 unload（旧语法兜底，不加 -w 以免永久禁用导致无法重启） */
-        pid_t unloadPid = 0;
-        char *unloadArgs[] = {(char *)"launchctl", (char *)"unload",
-                              (char *)"/Library/LaunchDaemons/com.hogan.trollshot.plist", NULL};
-        if (posix_spawn(&unloadPid, "/bin/launchctl", NULL, NULL, unloadArgs, NULL) == 0) {
-            int st = 0;
-            waitpid(unloadPid, &st, 0);
-        }
-
-        [[TSLogger sharedLogger] log:@"launchd 已卸载，退出 daemon..."];
+        /* 写入停止标志，wrapper 脚本检测到后不会重启 daemon */
+        FILE *f = fopen("/tmp/trollshotd.stop", "w");
+        if (f) fclose(f);
 
         /* 等待 HTTP 响应发送完毕 */
         usleep(150000); /* 150ms */
