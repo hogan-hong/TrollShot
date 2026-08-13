@@ -6,9 +6,8 @@
 	<string>com.hogan.trollshot</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/usr/bin/trollshotd</string>
-		<string>--port</string>
-		<string>6688</string>
+		<string>/bin/sh</string>
+		<string>/usr/bin/trollshotd_wrapper.sh</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>

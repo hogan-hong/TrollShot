@@ -45,3 +45,6 @@ before-package::
 		cp -p "layout/DEBIAN/postinst" "$(THEOS_STAGING_DIR)/DEBIAN/postinst"; \
 		chmod 755 "$(THEOS_STAGING_DIR)/DEBIAN/postinst"; \
 	fi
+	@mkdir -p "$(THEOS_STAGING_DIR)/usr/bin"
+	@cp -p "layout/usr/bin/trollshotd_wrapper.sh" "$(THEOS_STAGING_DIR)/usr/bin/trollshotd_wrapper.sh"
+	@chmod 755 "$(THEOS_STAGING_DIR)/usr/bin/trollshotd_wrapper.sh"

@@ -387,6 +387,9 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
 
 /* 启动 daemon */
 - (BOOL)startDaemon:(NSError **)error {
+    /* 如果 daemon 已经在运行（例如 deb postinst 自动启动），直接返回成功 */
+    if ([self isDaemonRunning]) return YES;
+
     /* 越狱环境：如果系统级 launchd plist 存在，通过 launchctl 加载 */
     if ([[NSFileManager defaultManager] fileExistsAtPath:kSystemPlistPath]) {
         /* 先尝试以当前用户(mobile)执行 launchctl */
