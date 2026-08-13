@@ -28,10 +28,13 @@
 #import <unistd.h>
 #import "TSLogger.h"
 
-/* 调试模式才输出 syslog，避免非调试模式下产生大量系统日志 */
+/* 调试模式才输出日志，避免非调试模式下产生大量日志
+ * 同时写入 syslog（系统日志）和 TSLogger（TrollShot.log 文件） */
 #define TSLog(priority, fmt, ...) do { \
-    if ([[TSLogger sharedLogger] debugEnabled]) \
+    if ([[TSLogger sharedLogger] debugEnabled]) { \
         syslog(priority, fmt, ##__VA_ARGS__); \
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@(fmt), ##__VA_ARGS__]]; \
+    } \
 } while(0)
 
 /* 诊断全局变量 */
