@@ -54,6 +54,13 @@ jobs:
           echo "=== 检查 .deb 中的关键文件 ==="
           dpkg-deb -c packages/com.hoganhong.trollshot_*.deb | grep -E "trollshotd|\.plist" || true
 
+          echo "=== 用 gzip 压缩重建 deb (rootful 兼容) ==="
+          rm -f packages/*.deb
+          dpkg-deb -Zgzip -b .theos/_ packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm64.deb
+          echo "=== 重建后的 deb 信息 ==="
+          dpkg-deb -I packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm64.deb
+          dpkg-deb -c packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm64.deb | grep -E "trollshotd|\.plist"
+
       - name: 打包 IPA
         run: |
           set -e
