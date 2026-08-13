@@ -3,7 +3,7 @@
 一个 TrollStore 可安装的极简 iOS 应用，只提供一个 HTTP 接口：
 
 ```
-GET http://<设备IP>:8080/screenshot
+GET http://<设备IP>:6688/screenshot
 ```
 
 访问后返回当前设备屏幕的 JPEG 截图。
@@ -100,12 +100,12 @@ make clean package FINALPACKAGE=1
 2. 在设备上打开 TrollShot 应用。
 3. 点击"启动服务"。
 4. 等待界面显示"服务状态：运行中"。
-5. 在同一局域网内的另一台设备上访问 `http://<设备IP>:8080/screenshot`。
+5. 在同一局域网内的另一台设备上访问 `http://<设备IP>:6688/screenshot`。
 
 ### API 接口
 
 ```
-GET http://<设备IP>:8080/screenshot
+GET http://<设备IP>:6688/screenshot
 ```
 
 支持以下查询参数，可单独使用或组合使用：

@@ -88,7 +88,7 @@
 
     if (running) {
         NSString *ip = [self localIPAddress];
-        self.statusLabel.text = [NSString stringWithFormat:@"服务状态：运行中\n访问 http://%@:8080/screenshot", ip];
+        self.statusLabel.text = [NSString stringWithFormat:@"服务状态：运行中\n访问 http://%@:6688/screenshot", ip];
         [self.toggleButton setTitle:@"停止服务" forState:UIControlStateNormal];
     } else {
         self.statusLabel.text = @"服务状态：已停止\n点击下方按钮启动";

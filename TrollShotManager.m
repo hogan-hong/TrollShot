@@ -26,7 +26,7 @@
 #define kLaunchdPlistName  @"com.hogan.trollshot.plist"
 #define kDaemonDestDir     @"/var/mobile/trollshot"
 #define kLogDir            @"/var/mobile/trollshot"
-#define kListenPort        8080
+#define kListenPort        6688
 #define kDebugFlagFile     @"/var/mobile/trollshot/debug_mode"
 #define kSystemPlistPath   @"/Library/LaunchDaemons/com.hogan.trollshot.plist"
 
@@ -233,7 +233,7 @@
 
     /* 根据调试模式标志决定启动参数 */
     BOOL debug = [TrollShotManager isDebugMode];
-    NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObjects:@"--port", @"8080", nil];
+    NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObjects:@"--port", @"6688", nil];
     if (debug) {
         [args addObject:@"--debug"];
     }

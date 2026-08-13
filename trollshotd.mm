@@ -26,7 +26,7 @@
 #import "TSLogger.h"
 
 static volatile BOOL gKeepRunning = YES;
-static uint16_t gPort = 8080;
+static uint16_t gPort = 6688;
 static BOOL gDebug = NO;
 
 static void onSignal(int sig) {
@@ -49,7 +49,7 @@ int main(int argc, const char *argv[]) {
         signal(SIGINT, onSignal);
         signal(SIGHUP, SIG_IGN);
 
-        uint16_t port = 8080;
+        uint16_t port = 6688;
         for (int i = 1; i < argc; i++) {
             if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
                 port = (uint16_t)atoi(argv[++i]);
