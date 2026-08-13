@@ -240,9 +240,14 @@ extern "C" void StartScreenshotServer(uint16_t port) {
     if (g_isJailbreakMode) {
         gMaxConcurrent = 1; /* 越狱模式串行，避免 framebuffer 并发冲突 */
     }
+    NSString *modeStr;
+    if (g_isJailbreakMode) {
+        modeStr = g_useFramebuffer ? @"越狱 IOMobileFramebuffer 直读" : @"越狱 CARenderServer（framebuffer降级，串行）";
+    } else {
+        modeStr = @"非越狱 CARenderServer";
+    }
     [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"截图模式：%@（uid=%d，并发=%d）",
-        g_isJailbreakMode ? @"越狱 IOMobileFramebuffer 直读" : @"非越狱 CARenderServer",
-        getuid(), gMaxConcurrent]];
+        modeStr, getuid(), gMaxConcurrent]];
 
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (serverSocket < 0) {

@@ -21,6 +21,7 @@ extern BOOL g_lastRotated;
 
 /* 诊断用：当前截图模式（越狱=framebuffer直读 / 非越狱=CARenderServer渲染） */
 extern BOOL g_isJailbreakMode;
+extern BOOL g_useFramebuffer;  /* 实际是否使用 framebuffer 直读（越狱但framebuffer失败时为NO） */
 
 @interface ScreenCapturer : NSObject
 

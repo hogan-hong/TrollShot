@@ -26,6 +26,7 @@
 #import <syslog.h>
 #import <dlfcn.h>
 #import <unistd.h>
+#import <string.h>
 #import "TSLogger.h"
 
 /* 调试模式才输出 syslog，避免非调试模式下产生大量系统日志
@@ -42,6 +43,19 @@ size_t g_lastFinalWidth = 0;
 size_t g_lastFinalHeight = 0;
 BOOL g_lastRotated = NO;
 BOOL g_isJailbreakMode = NO;
+BOOL g_useFramebuffer = NO;
+
+/* 越狱环境下尝试提升为 root 权限
+ * rootful 越狱（checkra1n/unc0ver）内核补丁允许 setuid(0)
+ * IOMobileFramebuffer 直读需要 root 权限 */
+static void TryEscalateToRoot(void) {
+    if (getuid() == 0) return;
+    if (setuid(0) == 0) {
+        TSLog(LOG_NOTICE, "[TrollShot] setuid(0) 成功，已提升为 root");
+    } else {
+        TSLog(LOG_ERR, "[TrollShot] setuid(0) 失败: %s (errno=%d)", strerror(errno), errno);
+    }
+}
 
 #ifdef __cplusplus
 extern "C" {
@@ -111,9 +125,10 @@ static BOOL DetectJailbreak(void) {
     CIContext *mCIContext;            /* 复用 CIContext */
     FBSOrientationObserver *mOrientationObserver;  /* 复用方向观察者 */
 
-    /* 帧缓存（seed 未变时直接返回上次结果，减少重复编码） */
+    /* 帧缓存（seed 未变或时间间隔短时直接返回上次结果，减少重复编码） */
     NSData *mCachedJPEG;
     BOOL mHasCachedFrame;
+    NSTimeInterval mLastCaptureTime;  /* 上次截图时间（CARenderServer 模式时间缓存） */
 
     /* 线程安全锁 */
     NSLock *mLock;
@@ -137,6 +152,7 @@ static BOOL DetectJailbreak(void) {
     mUseFramebuffer = NO;
     mHasCachedFrame = NO;
     mLastSeed = 0;
+    mLastCaptureTime = 0;
 
     /* 复用 CIContext（不再每次截图 new 一个） */
     mCIContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer : @NO}];
@@ -154,20 +170,31 @@ static BOOL DetectJailbreak(void) {
     [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"越狱检测: mode=%d, uid=%d", g_isJailbreakMode, getuid()]];
 
     if (g_isJailbreakMode) {
-        /* 越狱模式：尝试 framebuffer 直读 */
+        /* 越狱模式：尝试提升为 root（framebuffer 直读需要 root 权限）
+         * rootful 越狱（checkra1n/unc0ver）内核补丁允许 setuid(0) */
+        if (getuid() != 0) {
+            TryEscalateToRoot();
+            [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"权限提升: uid=%d", getuid()]];
+        }
+
+        /* 尝试 framebuffer 直读 */
         mUseFramebuffer = [self setupFramebufferDirectRead];
+        g_useFramebuffer = mUseFramebuffer;
+
         if (mUseFramebuffer) {
             TSLog(LOG_NOTICE, "[TrollShot] 越狱模式: framebuffer 直读初始化成功");
             [[TSLogger sharedLogger] log:@"截图模式：越狱 IOMobileFramebuffer 直读"];
         } else {
-            TSLog(LOG_NOTICE, "[TrollShot] framebuffer 直读失败，降级为 CARenderServer");
-            [[TSLogger sharedLogger] log:@"截图模式：越狱检测到但framebuffer失败，降级为CARenderServer"];
-            g_isJailbreakMode = NO;
+            /* framebuffer 失败，降级为 CARenderServer，但保持越狱模式标记（串行执行）
+             * 越狱环境即使降级也必须串行，避免 Substitute hook 并发 mach IPC 开销 */
+            TSLog(LOG_NOTICE, "[TrollShot] framebuffer 直读失败，降级为 CARenderServer（串行）");
+            [[TSLogger sharedLogger] log:@"截图模式：越狱但framebuffer降级CARenderServer（串行）"];
+            /* 不重置 g_isJailbreakMode，保持串行执行 */
         }
     }
 
     if (!mUseFramebuffer) {
-        /* 非越狱路径：创建 IOSurface + accelerator（原逻辑完全不变） */
+        /* 非越狱路径或越狱降级路径：创建 IOSurface + accelerator */
         [self setupCARenderServer];
         if (!g_isJailbreakMode) {
             [[TSLogger sharedLogger] log:@"截图模式：非越狱 CARenderServer"];
@@ -347,8 +374,15 @@ static BOOL DetectJailbreak(void) {
         TSLog(LOG_NOTICE, "[TrollShot] 越狱模式: framebuffer 直读, seed=%u, changed=%d", currentSeed, frameChanged);
     } else {
         /* ====================================================
-         * 非越狱模式：CARenderServerRenderDisplay（原逻辑完全不变）
+         * CARenderServer 模式（非越狱 或 越狱降级）
+         * 时间缓存：300ms 内重复请求直接返回上次结果，减少 mach IPC 开销
          * ==================================================== */
+        NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+        if (mHasCachedFrame && !rotate && CGRectIsEmpty(cropRect) && (now - mLastCaptureTime) < 0.3) {
+            TSLog(LOG_NOTICE, "[TrollShot] CARenderServer 时间缓存命中（%.0fms），返回缓存", (now - mLastCaptureTime) * 1000);
+            return mCachedJPEG;
+        }
+
         if (!mSrcSurface) {
             if (error)
                 *error = [NSError errorWithDomain:@"TrollShot" code:4 userInfo:@{NSLocalizedDescriptionKey : @"源 IOSurface 未初始化"}];
@@ -357,6 +391,7 @@ static BOOL DetectJailbreak(void) {
 
         CARenderServerRenderDisplay(0, CFSTR("LCD"), mSrcSurface, 0, 0);
         srcSurface = mSrcSurface;
+        mLastCaptureTime = now;
     }
 
     /* 从源 surface 拷贝到目标 surface（两种模式共用） */
@@ -498,8 +533,8 @@ static BOOL DetectJailbreak(void) {
         *error = [NSError errorWithDomain:@"TrollShot" code:3 userInfo:@{NSLocalizedDescriptionKey : @"JPEG 编码失败"}];
     }
 
-    /* 越狱模式：缓存帧结果（仅在无旋转无裁剪时缓存） */
-    if (mUseFramebuffer && jpegData && !rotate && CGRectIsEmpty(cropRect)) {
+    /* 缓存帧结果（仅在无旋转无裁剪时缓存，两种模式共用） */
+    if (jpegData && !rotate && CGRectIsEmpty(cropRect)) {
         mCachedJPEG = jpegData;
         mHasCachedFrame = YES;
     }
