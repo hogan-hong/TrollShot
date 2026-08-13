@@ -311,19 +311,36 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
     /* 越狱环境：通过 persona API 以 root 身份启动 daemon
      * 这是越狱 app 获取 root 权限的标准方式
      * 非越狱环境调用会静默失败，进程以 mobile 启动 */
+    /* 越狱环境：尝试通过 persona API 以 root 身份启动 daemon
+     * 非越狱或内核不支持时，persona posix_spawn 返回 EPERM，降级为普通 spawn */
+    BOOL usePersona = YES;
     int personaRet = posix_spawnattr_set_persona_np(&attr, 0, POSIX_SPAWN_PERSONA_STARTS_AS_ROOT, NULL, NULL, 0);
-    /* dlsym 动态加载 setgroups_np（SDK 中不可用） */
-    int (*setgroups_np)(const posix_spawnattr_t *, uint32_t, const gid_t *, uint32_t) =
-        (int (*)(const posix_spawnattr_t *, uint32_t, const gid_t *, uint32_t))
-        dlsym(RTLD_DEFAULT, "posix_spawnattr_setgroups_np");
-    if (setgroups_np) {
-        gid_t zeroGid = 0;
-        setgroups_np(&attr, 1, &zeroGid, 0);
+    if (personaRet != 0) {
+        NSLog(@"[TrollShot] set_persona_np 失败: %d，降级为普通 spawn", personaRet);
+        usePersona = NO;
+    } else {
+        /* dlsym 动态加载 setgroups_np（SDK 中不可用） */
+        int (*setgroups_np)(const posix_spawnattr_t *, uint32_t, const gid_t *, uint32_t) =
+            (int (*)(const posix_spawnattr_t *, uint32_t, const gid_t *, uint32_t))
+            dlsym(RTLD_DEFAULT, "posix_spawnattr_setgroups_np");
+        if (setgroups_np) {
+            gid_t zeroGid = 0;
+            setgroups_np(&attr, 1, &zeroGid, 0);
+        }
+        NSLog(@"[TrollShot] persona root spawn: setgroups_np=%p", setgroups_np);
     }
-    NSLog(@"[TrollShot] persona root spawn: set_persona_np=%d, setgroups_np=%p", personaRet, setgroups_np);
 
     pid_t pid = 0;
     int ret = posix_spawn(&pid, cPath, &actions, &attr, argv, NULL);
+
+    /* persona spawn 失败（EPERM=内核不支持），降级为普通 spawn */
+    if (ret == EPERM && usePersona) {
+        NSLog(@"[TrollShot] persona posix_spawn 返回 EPERM，降级为普通 spawn（mobile 用户）");
+        posix_spawnattr_destroy(&attr);
+        posix_spawnattr_init(&attr);
+        posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
+        ret = posix_spawn(&pid, cPath, &actions, &attr, argv, NULL);
+    }
 
     posix_spawnattr_destroy(&attr);
     posix_spawn_file_actions_destroy(&actions);
