@@ -390,37 +390,21 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
     /* 如果 daemon 已经在运行（例如 deb postinst 自动启动），直接返回成功 */
     if ([self isDaemonRunning]) return YES;
 
-    /* 越狱环境：如果系统级 launchd plist 存在，通过 launchctl 加载 */
+    /* 越狱环境：系统级 launchd plist 存在（deb 已安装）
+     * daemon 由 launchd 管理的 wrapper 脚本运行，app 无需 root 权限。
+     * 如果之前通过 app 停止了服务，删除停止标志文件，wrapper 脚本会自动重启 daemon */
     if ([[NSFileManager defaultManager] fileExistsAtPath:kSystemPlistPath]) {
-        /* 先尝试以当前用户(mobile)执行 launchctl */
-        int ret = [self spawnCommand:@"/bin/launchctl" arguments:@[@"bootstrap", @"system", kSystemPlistPath]];
-        if (ret != 0) {
-            /* 旧语法兜底 */
-            ret = [self spawnCommand:@"/bin/launchctl" arguments:@[@"load", @"-w", kSystemPlistPath]];
-        }
-        /* 如果 mobile 用户执行失败，尝试 sudo（rootful 越狱通常有 sudo） */
-        if (ret != 0) {
-            ret = [self spawnCommand:@"/usr/bin/sudo" arguments:@[@"launchctl", @"load", @"-w", kSystemPlistPath]];
-        }
-        /* 等待端口就绪 */
-        for (int i = 0; i < 10; i++) {
+        /* 删除停止标志文件，让 wrapper 脚本重新启动 daemon */
+        [[NSFileManager defaultManager] removeItemAtPath:@"/tmp/trollshotd.stop" error:nil];
+        /* 等待 wrapper 脚本检测到标志已删除并重启 daemon（最多 5 秒） */
+        for (int i = 0; i < 50; i++) {
             if ([self isDaemonRunning]) return YES;
             [NSThread sleepForTimeInterval:0.1];
-        }
-        /* 读取日志帮助诊断 */
-        NSString *logContent = [NSString stringWithContentsOfFile:@"/tmp/trollshotd.log"
-                                                         encoding:NSUTF8StringEncoding
-                                                            error:nil];
-        NSString *errorMsg = @"launchctl 加载失败，可能需要 root 权限。\n请通过 SSH 以 root 执行：\nlaunchctl load -w /Library/LaunchDaemons/com.hogan.trollshot.plist";
-        if (logContent.length > 0) {
-            NSString *tail = logContent.length > 500 ?
-                [logContent substringFromIndex:logContent.length - 500] : logContent;
-            errorMsg = [NSString stringWithFormat:@"%@\n\n--- /tmp/trollshotd.log ---\n%@", errorMsg, tail];
         }
         if (error) {
             *error = [NSError errorWithDomain:@"TrollShot"
                                          code:3002
-                                     userInfo:@{NSLocalizedDescriptionKey : errorMsg}];
+                                     userInfo:@{NSLocalizedDescriptionKey : @"服务启动超时，wrapper 脚本可能未运行。请通过 SSH 检查：\nps aux | grep trollshotd_wrapper"}];
         }
         return NO;
     }
@@ -531,19 +515,12 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
                 [NSThread sleepForTimeInterval:0.1];
             }
         }
-        /* HTTP 关闭失败或 daemon 仍在运行，尝试 launchctl（可能权限不足） */
-        [self spawnLaunchctlUnload];
-        [NSThread sleepForTimeInterval:0.3];
-
-        if (![self isDaemonRunning]) {
-            [[NSFileManager defaultManager] removeItemAtPath:[self pidFilePath] error:nil];
-            return YES;
-        }
-
+        /* HTTP /stop 请求发送成功后，daemon 会写入 /tmp/trollshotd.stop 并退出，
+         * wrapper 脚本检测到标志后不会重启。等待 daemon 退出即可。 */
         if (error) {
             *error = [NSError errorWithDomain:@"TrollShot"
                                          code:3003
-                                     userInfo:@{NSLocalizedDescriptionKey : @"无法停止服务：daemon 以 root 运行，HTTP 关闭请求未成功。请通过 SSH 以 root 执行：\nlaunchctl unload /Library/LaunchDaemons/com.hogan.trollshot.plist"}];
+                                     userInfo:@{NSLocalizedDescriptionKey : @"无法停止服务，请稍后重试"}];
         }
         return NO;
     }
@@ -573,7 +550,7 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
     return YES;
 }
 
-/* 发送 HTTP /shutdown 请求到 daemon，让 root daemon 自行卸载 launchd 并退出 */
+/* 发送 HTTP /stop 请求到 daemon，让 daemon 写入停止标志并退出（不卸载 launchd） */
 - (BOOL)sendShutdownRequest {
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) return NO;
@@ -594,7 +571,7 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
         return NO;
     }
 
-    const char *req = "GET /shutdown HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    const char *req = "GET /stop HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
     ssize_t sent = send(sockfd, req, strlen(req), 0);
     if (sent <= 0) {
         close(sockfd);

@@ -147,6 +147,21 @@ static void HandleClientConnection(int client) {
             return;
         }
 
+        /* /stop：daemon 退出但保留 launchd，wrapper 通过标志文件决定是否重启
+         * 用于 app 停止/启动服务，不需要 root 权限操作 launchctl */
+        if (strncmp(buf, "GET /stop", 9) == 0) {
+            const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 8\r\nConnection: close\r\n\r\nstopped\n";
+            send(client, resp, strlen(resp), 0);
+            close(client);
+            [[TSLogger sharedLogger] log:@"处理 /stop 请求，写入停止标志并退出"];
+            /* 写入停止标志，wrapper 脚本检测到后不会重启 */
+            FILE *f = fopen("/tmp/trollshotd.stop", "w");
+            if (f) fclose(f);
+            /* 等待 HTTP 响应发送完毕 */
+            usleep(150000);
+            exit(0);
+        }
+
         /* /shutdown：daemon 自行卸载 launchd 并退出（越狱环境，root 权限） */
         if (strncmp(buf, "GET /shutdown", 13) == 0) {
             const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 18\r\nConnection: close\r\n\r\nShutting down...\n";
