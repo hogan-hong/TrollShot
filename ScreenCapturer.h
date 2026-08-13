@@ -19,6 +19,9 @@ extern size_t g_lastFinalWidth;
 extern size_t g_lastFinalHeight;
 extern BOOL g_lastRotated;
 
+/* 诊断用：当前截图模式（越狱=framebuffer直读 / 非越狱=CARenderServer渲染） */
+extern BOOL g_isJailbreakMode;
+
 @interface ScreenCapturer : NSObject
 
 + (instancetype)sharedCapturer;
@@ -29,7 +32,9 @@ extern BOOL g_lastRotated;
 /** 截取当前屏幕并编码为 JPEG。
  *  quality 范围为 0..1。rotate 为 YES 时强制旋转90度。
  *  cropRect 非空时只裁剪指定区域（基于旋转后的最终图像坐标）。
- *  cropRect 传 CGRectZero 表示不裁剪，返回全屏。 */
+ *  cropRect 传 CGRectZero 表示不裁剪，返回全屏。
+ *  越狱环境下使用 IOMobileFramebuffer 直读（高效，不经过 mach IPC）；
+ *  非越狱环境下使用 CARenderServerRenderDisplay（TrollStore 兼容）。 */
 - (nullable NSData *)captureJPEGWithQuality:(CGFloat)quality rotate:(BOOL)rotate cropRect:(CGRect)cropRect error:(NSError **)error;
 
 @end

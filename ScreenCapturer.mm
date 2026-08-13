@@ -14,15 +14,9 @@
 
 #import "ScreenCapturer.h"
 #import "IOSurfaceSPI.h"
+#import "IOMobileFramebufferSPI.h"
 #import "UIScreen+Private.h"
 #import "FBSOrientationObserver.h"
-
-/* 诊断全局变量 */
-size_t g_lastOrigWidth = 0;
-size_t g_lastOrigHeight = 0;
-size_t g_lastFinalWidth = 0;
-size_t g_lastFinalHeight = 0;
-BOOL g_lastRotated = NO;
 
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
@@ -30,6 +24,8 @@ BOOL g_lastRotated = NO;
 #import <ImageIO/ImageIO.h>
 #import <UIKit/UIKit.h>
 #import <syslog.h>
+#import <dlfcn.h>
+#import <unistd.h>
 #import "TSLogger.h"
 
 /* 调试模式才输出 syslog，避免非调试模式下产生大量系统日志 */
@@ -38,23 +34,72 @@ BOOL g_lastRotated = NO;
         syslog(priority, fmt, ##__VA_ARGS__); \
 } while(0)
 
+/* 诊断全局变量 */
+size_t g_lastOrigWidth = 0;
+size_t g_lastOrigHeight = 0;
+size_t g_lastFinalWidth = 0;
+size_t g_lastFinalHeight = 0;
+BOOL g_lastRotated = NO;
+BOOL g_isJailbreakMode = NO;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 CFIndex CARenderServerGetDirtyFrameCount(void *);
-/* 将主显示屏内容渲染到 IOSurface */
+/* 将主显示屏内容渲染到 IOSurface（非越狱模式使用） */
 void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef surface, int x, int y);
 
 #ifdef __cplusplus
 }
 #endif
 
+/* ============================================================
+ * 越狱检测：daemon 以 root 运行 = 越狱模式
+ * 非越狱（TrollStore）以 mobile 用户运行
+ * ============================================================ */
+static BOOL DetectJailbreak(void) {
+    static BOOL result = NO;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        /* daemon 由 launchd 以 root 启动，TrollStore app 以 mobile 运行 */
+        if (getuid() == 0) {
+            result = YES;
+            return;
+        }
+        /* 常见越狱标记 */
+        if (access("/var/jb", F_OK) == 0 || access("/.bootstrapped", F_OK) == 0 ||
+            access("/var/binpack", F_OK) == 0) {
+            result = YES;
+            return;
+        }
+    });
+    return result;
+}
+
 @implementation ScreenCapturer {
+    /* 共用：渲染属性和目标 surface */
     NSDictionary *mRenderProperties;
-    IOSurfaceRef mScreenSurface;
-    IOSurfaceRef mSrcSurface;
+    IOSurfaceRef mScreenSurface;      /* 目标 surface（两种模式都用到） */
+    IOSurfaceRef mSrcSurface;         /* 源 surface（仅非越狱 CARenderServer 模式） */
     IOSurfaceAcceleratorRef mAccelerator;
+
+    /* 越狱模式：framebuffer 直读 */
+    BOOL mUseFramebuffer;
+    IOMobileFramebufferRef mFramebuffer;
+    IOSurfaceRef mFbSurface;          /* 系统 framebuffer 的 IOSurface */
+    uint32_t mLastSeed;               /* 上次帧的 seed（脏帧检测） */
+
+    /* 复用对象（避免每次截图重新创建，减少内存分配和 GC 压力） */
+    CIContext *mCIContext;            /* 复用 CIContext */
+    FBSOrientationObserver *mOrientationObserver;  /* 复用方向观察者 */
+
+    /* 帧缓存（seed 未变时直接返回上次结果，减少重复编码） */
+    NSData *mCachedJPEG;
+    BOOL mHasCachedFrame;
+
+    /* 线程安全锁 */
+    NSLock *mLock;
 }
 
 + (instancetype)sharedCapturer {
@@ -71,12 +116,128 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
     if (!self)
         return nil;
 
+    mLock = [[NSLock alloc] init];
+    mUseFramebuffer = NO;
+    mHasCachedFrame = NO;
+    mLastSeed = 0;
+
+    /* 复用 CIContext（不再每次截图 new 一个） */
+    mCIContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer : @NO}];
+
+    /* 复用 FBSOrientationObserver（不再每次截图 new 一个） */
+    @try {
+        mOrientationObserver = [[FBSOrientationObserver alloc] init];
+    } @catch (NSException *e) {
+        TSLog(LOG_ERR, "[TrollShot] FBSOrientationObserver 初始化失败: %s", [e.reason UTF8String]);
+        mOrientationObserver = nil;
+    }
+
+    g_isJailbreakMode = DetectJailbreak();
+    TSLog(LOG_NOTICE, "[TrollShot] 越狱检测: g_isJailbreakMode=%d, uid=%d", g_isJailbreakMode, getuid());
+
+    if (g_isJailbreakMode) {
+        /* 越狱模式：尝试 framebuffer 直读 */
+        mUseFramebuffer = [self setupFramebufferDirectRead];
+        if (mUseFramebuffer) {
+            TSLog(LOG_NOTICE, "[TrollShot] 越狱模式: framebuffer 直读初始化成功");
+        } else {
+            TSLog(LOG_NOTICE, "[TrollShot] framebuffer 直读失败，降级为 CARenderServer");
+            g_isJailbreakMode = NO;
+        }
+    }
+
+    if (!mUseFramebuffer) {
+        /* 非越狱路径：创建 IOSurface + accelerator（原逻辑完全不变） */
+        [self setupCARenderServer];
+    }
+
+    return self;
+}
+
+/* ============================================================
+ * 非越狱模式初始化：创建 IOSurface 和 accelerator
+ * （原逻辑完全保留，不修改）
+ * ============================================================ */
+- (void)setupCARenderServer {
     CGSize screenSize = [[UIScreen mainScreen] _unjailedReferenceBoundsInPixels].size;
     int width = (int)round(screenSize.width);
     int height = (int)round(screenSize.height);
 
-    /* ARGB，每个通道 8 位，每像素 32 位 */
-    unsigned pixelFormat = 0x42475241; // 'ARGB'
+    unsigned pixelFormat = 0x42475241; /* 'ARGB' */
+    int bytesPerComponent = sizeof(uint8_t);
+    int bytesPerElement = bytesPerComponent * 4;
+    int bytesPerRow = (int)IOSurfaceAlignProperty(kIOSurfaceBytesPerRow, bytesPerElement * width);
+
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CFPropertyListRef colorSpacePropertyList = CGColorSpaceCopyPropertyList(colorSpace);
+    CGColorSpaceRelease(colorSpace);
+
+    mRenderProperties = @{
+        (__bridge NSString *)kIOSurfaceBytesPerElement : @(bytesPerElement),
+        (__bridge NSString *)kIOSurfaceBytesPerRow : @(bytesPerRow),
+        (__bridge NSString *)kIOSurfaceWidth : @(width),
+        (__bridge NSString *)kIOSurfaceHeight : @(height),
+        (__bridge NSString *)kIOSurfacePixelFormat : @(pixelFormat),
+        (__bridge NSString *)kIOSurfaceAllocSize : @(bytesPerRow * height),
+        (__bridge NSString *)kIOSurfaceColorSpace : CFBridgingRelease(colorSpacePropertyList),
+    };
+
+    mScreenSurface = IOSurfaceCreate((__bridge CFDictionaryRef)mRenderProperties);
+    mSrcSurface = IOSurfaceCreate((__bridge CFDictionaryRef)mRenderProperties);
+
+    IOReturn accelCreateRet = IOSurfaceAcceleratorCreate(kCFAllocatorDefault, NULL, &mAccelerator);
+    if (accelCreateRet == kIOReturnSuccess && mAccelerator) {
+        CFRunLoopSourceRef runLoopSource = IOSurfaceAcceleratorGetRunLoopSource(mAccelerator);
+        if (runLoopSource) {
+            CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, kCFRunLoopCommonModes);
+        }
+    }
+}
+
+/* ============================================================
+ * 越狱模式初始化：通过 dlsym 加载 IOMobileFramebuffer 私有 API
+ * 参考 screendump (fix14) 的 IOMobileFramebufferGetLayerDefaultSurface 方案
+ * 直接读取系统 framebuffer，完全绕过 mach IPC 链路
+ * ============================================================ */
+- (BOOL)setupFramebufferDirectRead {
+    /* dlopen IOKit 私有框架 */
+    void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
+    if (!iokit) {
+        TSLog(LOG_ERR, "[TrollShot] dlopen IOKit 失败: %s", dlerror());
+        return NO;
+    }
+
+    /* dlsym 加载 IOMobileFramebuffer 函数 */
+    IOMobileFramebufferGetMainDisplayFunc getMainDisplay =
+        (IOMobileFramebufferGetMainDisplayFunc)dlsym(iokit, "IOMobileFramebufferGetMainDisplay");
+    IOMobileFramebufferGetLayerDefaultSurfaceFunc getLayerSurface =
+        (IOMobileFramebufferGetLayerDefaultSurfaceFunc)dlsym(iokit, "IOMobileFramebufferGetLayerDefaultSurface");
+
+    if (!getMainDisplay || !getLayerSurface) {
+        TSLog(LOG_ERR, "[TrollShot] dlsym IOMobileFramebuffer 函数未找到");
+        return NO;
+    }
+
+    /* 获取主显示屏 framebuffer 连接 */
+    IOReturn ret = getMainDisplay(&mFramebuffer);
+    if (ret != kIOReturnSuccess || !mFramebuffer) {
+        TSLog(LOG_ERR, "[TrollShot] IOMobileFramebufferGetMainDisplay 失败: 0x%x", ret);
+        return NO;
+    }
+
+    /* 获取默认层（layer 0）的 IOSurface —— 这是系统实时更新的帧缓冲 */
+    ret = getLayerSurface(mFramebuffer, 0, &mFbSurface);
+    if (ret != kIOReturnSuccess || !mFbSurface) {
+        TSLog(LOG_ERR, "[TrollShot] IOMobileFramebufferGetLayerDefaultSurface 失败: 0x%x", ret);
+        return NO;
+    }
+
+    /* 创建目标 surface 和 accelerator，用于从 framebuffer 拷贝帧数据 */
+    CGSize screenSize = [[UIScreen mainScreen] _unjailedReferenceBoundsInPixels].size;
+    int width = (int)round(screenSize.width);
+    int height = (int)round(screenSize.height);
+
+    unsigned pixelFormat = 0x42475241; /* 'ARGB' */
     int bytesPerComponent = sizeof(uint8_t);
     int bytesPerElement = bytesPerComponent * 4;
     int bytesPerRow = (int)IOSurfaceAlignProperty(kIOSurfaceBytesPerRow, bytesPerElement * width);
@@ -97,8 +258,6 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
 
     mScreenSurface = IOSurfaceCreate((__bridge CFDictionaryRef)mRenderProperties);
 
-    /* 创建源 surface 和加速器；在主线程初始化并将加速器 run loop source 挂到主 run loop */
-    mSrcSurface = IOSurfaceCreate((__bridge CFDictionaryRef)mRenderProperties);
     IOReturn accelCreateRet = IOSurfaceAcceleratorCreate(kCFAllocatorDefault, NULL, &mAccelerator);
     if (accelCreateRet == kIOReturnSuccess && mAccelerator) {
         CFRunLoopSourceRef runLoopSource = IOSurfaceAcceleratorGetRunLoopSource(mAccelerator);
@@ -107,26 +266,78 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
         }
     }
 
-    return self;
+    /* 初始化 seed */
+    mLastSeed = IOSurfaceGetSeed(mFbSurface);
+
+    TSLog(LOG_NOTICE, "[TrollShot] framebuffer 直读: surface=%p, seed=%u, size=%dx%d",
+          mFbSurface, mLastSeed, width, height);
+
+    return YES;
 }
 
+/* ============================================================
+ * 截图入口：根据模式选择截图路径
+ * ============================================================ */
 - (NSData *)captureJPEGWithQuality:(CGFloat)quality rotate:(BOOL)rotate cropRect:(CGRect)cropRect error:(NSError **)error {
     if (quality < 0.0)
         quality = 0.0;
     if (quality > 1.0)
         quality = 1.0;
 
-    if (!mSrcSurface || !mAccelerator) {
+    /* 线程安全：同一时间只有一个截图操作 */
+    [mLock lock];
+    NSData *result = [self captureInternal:quality rotate:rotate cropRect:cropRect error:error];
+    [mLock unlock];
+    return result;
+}
+
+/* ============================================================
+ * 内部截图实现
+ * ============================================================ */
+- (NSData *)captureInternal:(CGFloat)quality rotate:(BOOL)rotate cropRect:(CGRect)cropRect error:(NSError **)error {
+    if (!mScreenSurface || !mAccelerator) {
         if (error)
             *error = [NSError errorWithDomain:@"TrollShot" code:4 userInfo:@{NSLocalizedDescriptionKey : @"IOSurface 加速器未初始化"}];
         return nil;
     }
 
-    /* 把主显示屏内容渲染进 IOSurface */
-    CARenderServerRenderDisplay(0, CFSTR("LCD"), mSrcSurface, 0, 0);
+    IOSurfaceRef srcSurface = NULL;
 
-    /* 转换成与 sRGB 兼容的 surface */
-    IOReturn accelRet = IOSurfaceAcceleratorTransferSurface(mAccelerator, mSrcSurface, mScreenSurface, NULL, NULL, NULL, NULL);
+    if (mUseFramebuffer) {
+        /* ====================================================
+         * 越狱模式：framebuffer 直读
+         * 1. 脏帧检测：IOSurfaceGetSeed 判断画面是否变化
+         * 2. 帧缓存：seed 未变且无旋转/裁剪需求时直接返回上次结果
+         * 3. 从 framebuffer surface 拷贝到目标 surface
+         * ==================================================== */
+        uint32_t currentSeed = IOSurfaceGetSeed(mFbSurface);
+        BOOL frameChanged = (currentSeed != mLastSeed);
+        mLastSeed = currentSeed;
+
+        if (!frameChanged && mHasCachedFrame && !rotate && CGRectIsEmpty(cropRect)) {
+            /* 帧没变，且不需要旋转/裁剪，直接返回缓存 */
+            TSLog(LOG_NOTICE, "[TrollShot] 帧未变化(seed=%u)，返回缓存 JPEG", currentSeed);
+            return mCachedJPEG;
+        }
+
+        srcSurface = mFbSurface;
+        TSLog(LOG_NOTICE, "[TrollShot] 越狱模式: framebuffer 直读, seed=%u, changed=%d", currentSeed, frameChanged);
+    } else {
+        /* ====================================================
+         * 非越狱模式：CARenderServerRenderDisplay（原逻辑完全不变）
+         * ==================================================== */
+        if (!mSrcSurface) {
+            if (error)
+                *error = [NSError errorWithDomain:@"TrollShot" code:4 userInfo:@{NSLocalizedDescriptionKey : @"源 IOSurface 未初始化"}];
+            return nil;
+        }
+
+        CARenderServerRenderDisplay(0, CFSTR("LCD"), mSrcSurface, 0, 0);
+        srcSurface = mSrcSurface;
+    }
+
+    /* 从源 surface 拷贝到目标 surface（两种模式共用） */
+    IOReturn accelRet = IOSurfaceAcceleratorTransferSurface(mAccelerator, srcSurface, mScreenSurface, NULL, NULL, NULL, NULL);
     if (accelRet != kIOReturnSuccess) {
         if (error)
             *error = [NSError errorWithDomain:@"TrollShot" code:1 userInfo:@{NSLocalizedDescriptionKey : @"IOSurface 加速器转换失败"}];
@@ -144,19 +355,17 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
         return nil;
     }
 
-    /* 用 CoreImage 将 ARGB 缓冲区转为 CGImage（不做旋转，先拿到原始位图） */
+    /* 用复用的 CIContext 将 ARGB 缓冲区转为 CGImage */
     CIImage *ciImage = [CIImage imageWithCVPixelBuffer:pixelBuffer];
-    CIContext *ciContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer : @NO}];
-    CGImageRef cgImage = [ciContext createCGImage:ciImage fromRect:[ciImage extent]];
+    CGImageRef cgImage = [mCIContext createCGImage:ciImage fromRect:[ciImage extent]];
 
     CVPixelBufferRelease(pixelBuffer);
 
     /*
      * 方向校正（CGContext 手动旋转）：
-     * 使用 FBSOrientationObserver（FrontBoardServices 私有框架）获取当前设备方向。
+     * 使用复用的 FBSOrientationObserver 获取当前设备方向。
      * rotate=YES 时强制旋转（手动覆盖，如 ?rotate=1）；
      * rotate=NO 时自动检测：横屏(Landscape)则旋转，竖屏(Portrait)则不旋转。
-     * 参考 TrollVNC 的 setupOrientationObserver 方案。
      */
     g_lastRotated = NO;
     g_lastOrigWidth = 0;
@@ -172,12 +381,11 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
         g_lastFinalWidth = imgWidth;
         g_lastFinalHeight = imgHeight;
 
-        /* 自动检测当前设备方向 */
-        BOOL shouldRotate = rotate; /* rotate=YES 强制旋转 */
-        if (!shouldRotate) {
+        /* 自动检测当前设备方向（复用 mOrientationObserver） */
+        BOOL shouldRotate = rotate;
+        if (!shouldRotate && mOrientationObserver) {
             @try {
-                FBSOrientationObserver *observer = [[FBSOrientationObserver alloc] init];
-                UIInterfaceOrientation orientation = [observer activeInterfaceOrientation];
+                UIInterfaceOrientation orientation = [mOrientationObserver activeInterfaceOrientation];
                 TSLog(LOG_NOTICE, "[TrollShot] FBSOrientationObserver: orientation=%ld", (long)orientation);
                 if (orientation == UIInterfaceOrientationLandscapeLeft ||
                     orientation == UIInterfaceOrientationLandscapeRight) {
@@ -249,7 +457,6 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
         }
 
         NSMutableData *data = [NSMutableData data];
-        /* 用 Uniform Type Identifier public.jpeg 作为图像格式 */
         CGImageDestinationRef dest = CGImageDestinationCreateWithData((__bridge CFMutableDataRef)data, CFSTR("public.jpeg"), 1, NULL);
         if (dest) {
             NSDictionary *props = @{
@@ -267,6 +474,13 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
     if (!jpegData && error) {
         *error = [NSError errorWithDomain:@"TrollShot" code:3 userInfo:@{NSLocalizedDescriptionKey : @"JPEG 编码失败"}];
     }
+
+    /* 越狱模式：缓存帧结果（仅在无旋转无裁剪时缓存） */
+    if (mUseFramebuffer && jpegData && !rotate && CGRectIsEmpty(cropRect)) {
+        mCachedJPEG = jpegData;
+        mHasCachedFrame = YES;
+    }
+
     return jpegData;
 }
 

@@ -24,8 +24,10 @@
 #import <spawn.h>
 #import <stdlib.h>
 
-/* 最大并发截图请求数，避免高并发时创建过多线程导致系统拒绝连接 */
-static const int kMaxConcurrentRequests = 4;
+/* 最大并发截图请求数
+ * 越狱模式：串行（1），避免 framebuffer 直读并发冲突
+ * 非越狱模式：4（原值），CARenderServer 可并发 */
+static int gMaxConcurrent = 4;
 static dispatch_semaphore_t gConcurrencySem;
 
 /* HandleClientConnection 在下方定义，线程入口需要前向声明 */
@@ -233,6 +235,12 @@ extern "C" void StartScreenshotServer(uint16_t port) {
     NSLog(@"[TrollShot] StartScreenshotServer 开始, port=%d", port);
     [[TSLogger sharedLogger] log:@"HTTP 服务线程启动"];
 
+    /* 触发 ScreenCapturer 初始化，检测越狱模式并设置并发数 */
+    [ScreenCapturer sharedCapturer];
+    if (g_isJailbreakMode) {
+        gMaxConcurrent = 1; /* 越狱模式串行，避免 framebuffer 并发冲突 */
+    }
+
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (serverSocket < 0) {
         NSLog(@"[TrollShot] socket() 失败: %s", strerror(errno));
@@ -277,9 +285,9 @@ extern "C" void StartScreenshotServer(uint16_t port) {
     }
     NSLog(@"[TrollShot] listen() OK - 端口 %d 就绪", port);
 
-    [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"HTTP 服务器已在端口 %d 监听，最大并发 %d", port, kMaxConcurrentRequests]];
+    [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"HTTP 服务器已在端口 %d 监听，最大并发 %d%@", port, gMaxConcurrent, g_isJailbreakMode ? @"（越狱串行）" : @""]];
 
-    gConcurrencySem = dispatch_semaphore_create(kMaxConcurrentRequests);
+    gConcurrencySem = dispatch_semaphore_create(gMaxConcurrent);
     if (!gConcurrencySem) {
         NSLog(@"[TrollShot] dispatch_semaphore_create 失败");
         [[TSLogger sharedLogger] log:@"初始化并发控制信号量失败"];

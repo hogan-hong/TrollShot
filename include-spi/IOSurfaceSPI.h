@@ -53,6 +53,9 @@ size_t IOSurfaceGetWidthOfPlane(IOSurfaceRef buffer, size_t planeIndex);
 size_t IOSurfaceGetHeightOfPlane(IOSurfaceRef buffer, size_t planeIndex);
 IOReturn IOSurfaceSetPurgeable(IOSurfaceRef buffer, uint32_t newState, uint32_t *oldState);
 
+/* 脏帧检测：返回 surface 的 seed 值，变化表示帧已更新 */
+uint32_t IOSurfaceGetSeed(IOSurfaceRef buffer);
+
 /* IOSurfaceAccelerator */
 extern const CFStringRef kIOSurfaceAcceleratorUnwireSurfaceKey;
 

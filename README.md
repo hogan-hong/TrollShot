@@ -12,10 +12,29 @@ TrollShot 源于 [TrollVNC](https://github.com/OwnGoalStudio/TrollVNC)，因此�
 
 ## 工作原理
 
+TrollShot 根据运行环境自动选择截图方式：
+
+### 越狱模式（daemon 以 root 运行）
+
+1. 通过 `IOMobileFramebufferGetMainDisplay` + `IOMobileFramebufferGetLayerDefaultSurface` 直接读取系统 framebuffer 的 IOSurface。
+2. 使用 `IOSurfaceGetSeed` 进行脏帧检测：画面未变化时直接返回缓存结果，跳过重复编码。
+3. 通过 `IOSurfaceAccelerator` 拷贝帧数据到目标 surface。
+4. 将 surface 零拷贝包装成 `CVPixelBuffer`，再用复用的 `CIContext` / `ImageIO` 编码为 JPEG。
+5. HTTP 并发降为串行（1），避免 framebuffer 读取冲突。
+
+此方案参考 [screendump](https://github.com/cosmosgenius/screendump) 的 fix14 实现，直接读取 framebuffer，完全绕过 mach IPC 链路，避免越狱注入（Substitute）对 `CARenderServerRenderDisplay` 的 hook 开销导致设备卡死。
+
+### 非越狱模式（TrollStore，以 mobile 用户运行）
+
 1. 通过私有 API `CARenderServerRenderDisplay` 将屏幕内容渲染到 `IOSurface`。
 2. 通过 `IOSurfaceAccelerator` 转换 surface 格式。
 3. 将 surface 零拷贝包装成 `CVPixelBuffer`，再用 `CoreImage` / `ImageIO` 编码为 JPEG。
-4. 通过后台 daemon `trollshotd` 运行的迷你 HTTP 服务器返回 JPEG。
+4. HTTP 最大并发 4（原值）。
+
+### 共通优化
+
+- `CIContext` 和 `FBSOrientationObserver` 在初始化时创建一次并复用，不再每次截图重新分配。
+- 越狱模式下启用帧缓存：`IOSurfaceGetSeed` 未变化时直接返回上次的 JPEG，减少重复编码开销。
 
 没有 VNC 协议，没有 HID 事件注入，没有远程控制。
 
@@ -174,7 +193,7 @@ App 界面提供「调试模式」开关按钮：
 
 ### 核心源码
 
-- `ScreenCapturer.{h,mm}` - 通过私有 API 截屏，包含旋转（FBSOrientationObserver）和裁剪逻辑
+- `ScreenCapturer.{h,mm}` - 通过私有 API 截屏，越狱模式用 IOMobileFramebuffer 直读 framebuffer，非越狱模式用 CARenderServerRenderDisplay；包含脏帧检测、帧缓存、旋转（FBSOrientationObserver）和裁剪逻辑
 - `HTTPScreenshotServer.{h,mm}` - 迷你 HTTP 服务器，解析 `rotate` / `crop` 查询参数
 - `trollshotd.mm` - 后台 daemon 入口，解析 `--debug` 参数
 - `TrollShotManager.{h,m}` - 启动/停止 daemon 的管理逻辑，调试模式标志读写，stdout/stderr 重定向控制
@@ -184,8 +203,9 @@ App 界面提供「调试模式」开关按钮：
 ### 私有框架声明
 
 - `include-spi/FBSOrientationObserver.h` - FrontBoardServices 方向观察器（来自 TrollVNC）
+- `include-spi/IOMobileFramebufferSPI.h` - IOMobileFramebuffer 私有接口声明（越狱模式 framebuffer 直读，参考 screendump fix14）
 - `include-spi/IOKitSPI.h` - IOKit 私有接口声明
-- `include-spi/IOSurfaceSPI.h` - IOSurface 私有接口声明
+- `include-spi/IOSurfaceSPI.h` - IOSurface 私有接口声明（含 IOSurfaceGetSeed 脏帧检测）
 - `include-spi/UIScreen+Private.h` - UIScreen 私有方法声明
 
 ### 构建与配置
