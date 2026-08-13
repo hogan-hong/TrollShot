@@ -52,8 +52,10 @@ static void TryEscalateToRoot(void) {
     if (getuid() == 0) return;
     if (setuid(0) == 0) {
         TSLog(LOG_NOTICE, "[TrollShot] setuid(0) 成功，已提升为 root");
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"setuid(0) 成功，uid=%d", getuid()]];
     } else {
         TSLog(LOG_ERR, "[TrollShot] setuid(0) 失败: %s (errno=%d)", strerror(errno), errno);
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"setuid(0) 失败: errno=%d (%s)，uid=%d", errno, strerror(errno), getuid()]];
     }
 }
 
@@ -250,37 +252,45 @@ static BOOL DetectJailbreak(void) {
  * 直接读取系统 framebuffer，完全绕过 mach IPC 链路
  * ============================================================ */
 - (BOOL)setupFramebufferDirectRead {
-    /* dlopen IOKit 私有框架 */
-    void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
-    if (!iokit) {
-        TSLog(LOG_ERR, "[TrollShot] dlopen IOKit 失败: %s", dlerror());
+    /* dlopen IOMobileFramebuffer 私有框架（不是 IOKit.framework） */
+    void *fbFramework = dlopen("/System/Library/PrivateFrameworks/IOMobileFramebuffer.framework/IOMobileFramebuffer", RTLD_LAZY);
+    if (!fbFramework) {
+        TSLog(LOG_ERR, "[TrollShot] dlopen IOMobileFramebuffer 失败: %s", dlerror());
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: dlopen IOMobileFramebuffer.framework 失败: %s", dlerror()]];
         return NO;
     }
+    [[TSLogger sharedLogger] log:@"framebuffer: dlopen IOMobileFramebuffer.framework 成功"];
 
     /* dlsym 加载 IOMobileFramebuffer 函数 */
     IOMobileFramebufferGetMainDisplayFunc getMainDisplay =
-        (IOMobileFramebufferGetMainDisplayFunc)dlsym(iokit, "IOMobileFramebufferGetMainDisplay");
+        (IOMobileFramebufferGetMainDisplayFunc)dlsym(fbFramework, "IOMobileFramebufferGetMainDisplay");
     IOMobileFramebufferGetLayerDefaultSurfaceFunc getLayerSurface =
-        (IOMobileFramebufferGetLayerDefaultSurfaceFunc)dlsym(iokit, "IOMobileFramebufferGetLayerDefaultSurface");
+        (IOMobileFramebufferGetLayerDefaultSurfaceFunc)dlsym(fbFramework, "IOMobileFramebufferGetLayerDefaultSurface");
 
     if (!getMainDisplay || !getLayerSurface) {
-        TSLog(LOG_ERR, "[TrollShot] dlsym IOMobileFramebuffer 函数未找到");
+        TSLog(LOG_ERR, "[TrollShot] dlsym IOMobileFramebuffer 函数未找到 (getMainDisplay=%p, getLayerSurface=%p)", getMainDisplay, getLayerSurface);
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: dlsym 失败 (getMainDisplay=%p, getLayerSurface=%p)", getMainDisplay, getLayerSurface]];
         return NO;
     }
+    [[TSLogger sharedLogger] log:@"framebuffer: dlsym IOMobileFramebuffer 函数加载成功"];
 
     /* 获取主显示屏 framebuffer 连接 */
     IOReturn ret = getMainDisplay(&mFramebuffer);
     if (ret != kIOReturnSuccess || !mFramebuffer) {
         TSLog(LOG_ERR, "[TrollShot] IOMobileFramebufferGetMainDisplay 失败: 0x%x", ret);
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: GetMainDisplay 失败 ret=0x%x (uid=%d)", ret, getuid()]];
         return NO;
     }
+    [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: GetMainDisplay 成功 mFramebuffer=%p", mFramebuffer]];
 
-    /* 获取默认层（layer 0）的 IOSurface —— 这是系统实时更新的帧缓冲 */
+    /* 获取默认层（layer 0）的 IOSurface -- 这是系统实时更新的帧缓冲 */
     ret = getLayerSurface(mFramebuffer, 0, &mFbSurface);
     if (ret != kIOReturnSuccess || !mFbSurface) {
         TSLog(LOG_ERR, "[TrollShot] IOMobileFramebufferGetLayerDefaultSurface 失败: 0x%x", ret);
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: GetLayerDefaultSurface 失败 ret=0x%x", ret]];
         return NO;
     }
+    [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: GetLayerDefaultSurface 成功 mFbSurface=%p", mFbSurface]];
 
     /* 创建目标 surface 和 accelerator，用于从 framebuffer 拷贝帧数据 */
     CGSize screenSize = [[UIScreen mainScreen] _unjailedReferenceBoundsInPixels].size;
