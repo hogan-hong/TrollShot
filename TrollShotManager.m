@@ -16,6 +16,7 @@
 #import <netinet/in.h>
 #import <signal.h>
 #import <spawn.h>
+#import <dlfcn.h>
 #import <sys/socket.h>
 #import <sys/stat.h>
 #import <sys/types.h>
@@ -29,8 +30,7 @@
 extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
     uid_t, uint32_t, const char *__restrict,
     const char *__restrict, uint32_t);
-extern int posix_spawnattr_setgroups_np(const posix_spawnattr_t *__restrict,
-    uint32_t, const gid_t *__restrict, uint32_t);
+/* setgroups_np 在 SDK 中不可用，用 dlsym 动态加载 */
 
 #define kDaemonName        @"trollshotd"
 #define kLaunchdPlistName  @"com.hogan.trollshot.plist"
@@ -312,9 +312,15 @@ extern int posix_spawnattr_setgroups_np(const posix_spawnattr_t *__restrict,
      * 这是越狱 app 获取 root 权限的标准方式
      * 非越狱环境调用会静默失败，进程以 mobile 启动 */
     int personaRet = posix_spawnattr_set_persona_np(&attr, 0, POSIX_SPAWN_PERSONA_STARTS_AS_ROOT, NULL, NULL, 0);
-    gid_t zeroGid = 0;
-    posix_spawnattr_setgroups_np(&attr, 1, &zeroGid, 0);
-    NSLog(@"[TrollShot] persona root spawn: set_persona_np 返回 %d", personaRet);
+    /* dlsym 动态加载 setgroups_np（SDK 中不可用） */
+    int (*setgroups_np)(const posix_spawnattr_t *, uint32_t, const gid_t *, uint32_t) =
+        (int (*)(const posix_spawnattr_t *, uint32_t, const gid_t *, uint32_t))
+        dlsym(RTLD_DEFAULT, "posix_spawnattr_setgroups_np");
+    if (setgroups_np) {
+        gid_t zeroGid = 0;
+        setgroups_np(&attr, 1, &zeroGid, 0);
+    }
+    NSLog(@"[TrollShot] persona root spawn: set_persona_np=%d, setgroups_np=%p", personaRet, setgroups_np);
 
     pid_t pid = 0;
     int ret = posix_spawn(&pid, cPath, &actions, &attr, argv, NULL);
