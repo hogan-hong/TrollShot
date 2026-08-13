@@ -389,21 +389,35 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
 - (BOOL)startDaemon:(NSError **)error {
     /* 越狱环境：如果系统级 launchd plist 存在，通过 launchctl 加载 */
     if ([[NSFileManager defaultManager] fileExistsAtPath:kSystemPlistPath]) {
-        /* 先尝试 bootstrap-load（新语法） */
+        /* 先尝试以当前用户(mobile)执行 launchctl */
         int ret = [self spawnCommand:@"/bin/launchctl" arguments:@[@"bootstrap", @"system", kSystemPlistPath]];
         if (ret != 0) {
             /* 旧语法兜底 */
-            [self spawnCommand:@"/bin/launchctl" arguments:@[@"load", @"-w", kSystemPlistPath]];
+            ret = [self spawnCommand:@"/bin/launchctl" arguments:@[@"load", @"-w", kSystemPlistPath]];
+        }
+        /* 如果 mobile 用户执行失败，尝试 sudo（rootful 越狱通常有 sudo） */
+        if (ret != 0) {
+            ret = [self spawnCommand:@"/usr/bin/sudo" arguments:@[@"launchctl", @"load", @"-w", kSystemPlistPath]];
         }
         /* 等待端口就绪 */
         for (int i = 0; i < 10; i++) {
             if ([self isDaemonRunning]) return YES;
             [NSThread sleepForTimeInterval:0.1];
         }
+        /* 读取日志帮助诊断 */
+        NSString *logContent = [NSString stringWithContentsOfFile:@"/tmp/trollshotd.log"
+                                                         encoding:NSUTF8StringEncoding
+                                                            error:nil];
+        NSString *errorMsg = @"launchctl 加载失败，可能需要 root 权限。\n请通过 SSH 以 root 执行：\nlaunchctl load -w /Library/LaunchDaemons/com.hogan.trollshot.plist";
+        if (logContent.length > 0) {
+            NSString *tail = logContent.length > 500 ?
+                [logContent substringFromIndex:logContent.length - 500] : logContent;
+            errorMsg = [NSString stringWithFormat:@"%@\n\n--- /tmp/trollshotd.log ---\n%@", errorMsg, tail];
+        }
         if (error) {
             *error = [NSError errorWithDomain:@"TrollShot"
                                          code:3002
-                                     userInfo:@{NSLocalizedDescriptionKey : @"launchctl 加载失败，请检查 /var/mobile/trollshot/trollshotd.log"}];
+                                     userInfo:@{NSLocalizedDescriptionKey : errorMsg}];
         }
         return NO;
     }

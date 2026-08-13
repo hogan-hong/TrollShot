@@ -63,7 +63,9 @@ jobs:
           dpkg-deb -Zgzip -b .theos/_ packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm.deb
           echo "=== 重建后的 deb 信息 ==="
           dpkg-deb -I packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm.deb
-          dpkg-deb -c packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm.deb | grep -E "trollshotd|\.plist"
+          dpkg-deb -c packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm.deb | grep -E "trollshotd|\.plist|postinst"
+          echo "=== 验证 DEBIAN 脚本 ==="
+          dpkg-deb --info packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm.deb || true
 
       - name: 打包 IPA
         run: |

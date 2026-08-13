@@ -40,3 +40,8 @@ before-package::
 	@cp -p "layout/Library/LaunchDaemons/com.hogan.trollshot.plist" "$(THEOS_STAGING_DIR)/Applications/TrollShot.app/com.hogan.trollshot.plist"
 	@mkdir -p "$(THEOS_STAGING_DIR)/Library/LaunchDaemons"
 	@cp -p "layout/Library/LaunchDaemons/com.hogan.trollshot.plist" "$(THEOS_STAGING_DIR)/Library/LaunchDaemons/com.hogan.trollshot.plist"
+	@mkdir -p "$(THEOS_STAGING_DIR)/DEBIAN"
+	@if [ -f "layout/DEBIAN/postinst" ]; then \
+		cp -p "layout/DEBIAN/postinst" "$(THEOS_STAGING_DIR)/DEBIAN/postinst"; \
+		chmod 755 "$(THEOS_STAGING_DIR)/DEBIAN/postinst"; \
+	fi

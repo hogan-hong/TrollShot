@@ -1,0 +1,21 @@
+#!/bin/bash
+# TrollShot deb 安装后自动加载 daemon
+
+echo "TrollShot: 正在加载 launchd daemon..."
+
+# 加载 LaunchDaemon（以 root 运行，deb 安装后就是 root）
+launchctl load -w /Library/LaunchDaemons/com.hogan.trollshot.plist 2>/dev/null || \
+launchctl bootstrap system /Library/LaunchDaemons/com.hogan.trollshot.plist 2>/dev/null || true
+
+# 等待端口就绪
+sleep 1
+
+# 检查 daemon 是否在运行
+if launchctl list | grep -q com.hogan.trollshot; then
+    echo "TrollShot: daemon 已启动"
+else
+    echo "TrollShot: daemon 未自动启动，请手动执行："
+    echo "  launchctl load -w /Library/LaunchDaemons/com.hogan.trollshot.plist"
+fi
+
+exit 0
