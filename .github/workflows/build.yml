@@ -92,6 +92,14 @@ jobs:
           path: TrollShot.ipa
           if-no-files-found: error
 
+      - name: 上传 deb 越狱包
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrollShot-deb
+          path: packages/*.deb
+          if-no-files-found: error
+
       - name: 上传解包调试信息
         if: always()
         uses: actions/upload-artifact@v4
