@@ -22,6 +22,16 @@
 #import <sys/wait.h>
 #import <unistd.h>
 
+/* 私有 API：以 root 身份启动进程（越狱环境内核补丁支持）
+ * Filza、NewTerm 等越狱 app 通用方案
+ * 非越狱环境此调用会被忽略，进程以当前用户(mobile)启动 */
+#define POSIX_SPAWN_PERSONA_STARTS_AS_ROOT 1
+extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
+    uid_t, uint32_t, const char *__restrict,
+    const char *__restrict, uint32_t);
+extern int posix_spawnattr_setgroups_np(const posix_spawnattr_t *__restrict,
+    uint32_t, const gid_t *__restrict, uint32_t);
+
 #define kDaemonName        @"trollshotd"
 #define kLaunchdPlistName  @"com.hogan.trollshot.plist"
 #define kDaemonDestDir     @"/var/mobile/trollshot"
@@ -297,6 +307,14 @@
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
     posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
+
+    /* 越狱环境：通过 persona API 以 root 身份启动 daemon
+     * 这是越狱 app 获取 root 权限的标准方式
+     * 非越狱环境调用会静默失败，进程以 mobile 启动 */
+    int personaRet = posix_spawnattr_set_persona_np(&attr, 0, POSIX_SPAWN_PERSONA_STARTS_AS_ROOT, NULL, NULL, 0);
+    gid_t zeroGid = 0;
+    posix_spawnattr_setgroups_np(&attr, 1, &zeroGid, 0);
+    NSLog(@"[TrollShot] persona root spawn: set_persona_np 返回 %d", personaRet);
 
     pid_t pid = 0;
     int ret = posix_spawn(&pid, cPath, &actions, &attr, argv, NULL);
