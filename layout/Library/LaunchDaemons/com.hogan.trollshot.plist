@@ -6,7 +6,7 @@
 	<string>com.hogan.trollshot</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/var/mobile/trollshot/trollshotd</string>
+		<string>/usr/bin/trollshotd</string>
 		<string>--port</string>
 		<string>6688</string>
 	</array>
@@ -15,9 +15,9 @@
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardOutPath</key>
-	<string>/var/mobile/trollshot/trollshotd.log</string>
+	<string>/tmp/trollshotd.log</string>
 	<key>StandardErrorPath</key>
-	<string>/var/mobile/trollshot/trollshotd.log</string>
+	<string>/tmp/trollshotd.log</string>
 	<key>UserName</key>
 	<string>root</string>
 	<key>GroupName</key>
