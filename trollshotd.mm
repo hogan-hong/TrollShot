@@ -64,7 +64,7 @@ int main(int argc, const char *argv[]) {
             NSString *flagContent = [NSString stringWithContentsOfFile:@"/var/mobile/trollshot/debug_mode"
                                                               encoding:NSUTF8StringEncoding
                                                                  error:nil];
-            if ([flagContent stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] isEqualToString:@"1"]) {
+            if ([[flagContent stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] isEqualToString:@"1"]) {
                 gDebug = YES;
             }
         }
