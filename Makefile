@@ -38,3 +38,5 @@ before-package::
 	fi
 	@chmod +x "$(THEOS_STAGING_DIR)/Applications/TrollShot.app/trollshotd"
 	@cp -p "layout/Library/LaunchDaemons/com.hogan.trollshot.plist" "$(THEOS_STAGING_DIR)/Applications/TrollShot.app/com.hogan.trollshot.plist"
+	@mkdir -p "$(THEOS_STAGING_DIR)/Library/LaunchDaemons"
+	@cp -p "layout/Library/LaunchDaemons/com.hogan.trollshot.plist" "$(THEOS_STAGING_DIR)/Library/LaunchDaemons/com.hogan.trollshot.plist"
