@@ -3,19 +3,64 @@
 
 echo "TrollShot: 正在加载 launchd daemon..."
 
-# 加载 LaunchDaemon（以 root 运行，deb 安装后就是 root）
-launchctl load -w /Library/LaunchDaemons/com.hogan.trollshot.plist 2>/dev/null || \
-launchctl bootstrap system /Library/LaunchDaemons/com.hogan.trollshot.plist 2>/dev/null || true
+# 检查 daemon 二进制
+if [ ! -f /usr/bin/trollshotd ]; then
+    echo "TrollShot: 错误 - /usr/bin/trollshotd 不存在"
+    exit 0
+fi
+chmod 755 /usr/bin/trollshotd
+echo "TrollShot: daemon 二进制权限已设置"
+
+# 检查 plist
+if [ ! -f /Library/LaunchDaemons/com.hogan.trollshot.plist ]; then
+    echo "TrollShot: 错误 - plist 不存在"
+    exit 0
+fi
+echo "TrollShot: plist 存在"
+
+# 查找 launchctl
+LAUNCHCTL=""
+for p in /bin/launchctl /usr/bin/launchctl /usr/local/bin/launchctl; do
+    if [ -x "$p" ]; then
+        LAUNCHCTL="$p"
+        break
+    fi
+done
+if [ -z "$LAUNCHCTL" ]; then
+    echo "TrollShot: 错误 - 找不到 launchctl"
+    exit 0
+fi
+echo "TrollShot: 使用 launchctl: $LAUNCHCTL"
+
+# 先卸载（忽略错误）
+$LAUNCHCTL unload /Library/LaunchDaemons/com.hogan.trollshot.plist 2>/dev/null
+$LAUNCHCTL bootout system/com.hogan.trollshot 2>/dev/null
+
+# 尝试加载
+echo "TrollShot: 尝试 launchctl load..."
+$LAUNCHCTL load -w /Library/LaunchDaemons/com.hogan.trollshot.plist 2>&1
+LOAD_RET=$?
+
+if [ $LOAD_RET -ne 0 ]; then
+    echo "TrollShot: load 失败(ret=$LOAD_RET)，尝试 bootstrap..."
+    $LAUNCHCTL bootstrap system /Library/LaunchDaemons/com.hogan.trollshot.plist 2>&1
+    BOOT_RET=$?
+    echo "TrollShot: bootstrap ret=$BOOT_RET"
+fi
 
 # 等待端口就绪
-sleep 1
+sleep 2
 
 # 检查 daemon 是否在运行
-if launchctl list | grep -q com.hogan.trollshot; then
+if $LAUNCHCTL list | grep -q com.hogan.trollshot; then
     echo "TrollShot: daemon 已启动"
 else
-    echo "TrollShot: daemon 未自动启动，请手动执行："
-    echo "  launchctl load -w /Library/LaunchDaemons/com.hogan.trollshot.plist"
+    echo "TrollShot: daemon 未自动启动"
+    echo "TrollShot: 尝试直接运行 daemon 查看错误..."
+    /usr/bin/trollshotd --port 6688 2>&1 | head -5
+    echo "TrollShot: 请手动执行："
+    echo "  $LAUNCHCTL load -w /Library/LaunchDaemons/com.hogan.trollshot.plist"
+    echo "  或直接运行: /usr/bin/trollshotd --port 6688"
 fi
 
 exit 0
