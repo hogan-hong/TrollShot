@@ -218,6 +218,33 @@
     }
 
     chmod([[self installedDaemonPath] fileSystemRepresentation], 0755);
+
+    /* 同时复制 launchd plist 到 /var/mobile/trollshot/ */
+    NSString *srcPlist = [self bundledPlistPath];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:srcPlist]) {
+        NSString *dstPlist = [self installedPlistPath];
+        [[NSFileManager defaultManager] removeItemAtPath:dstPlist error:nil];
+        [[NSFileManager defaultManager] copyItemAtPath:srcPlist toPath:dstPlist error:nil];
+    }
+
+    /* 尝试复制 plist 到 /Library/LaunchDaemons/（越狱环境可能可写） */
+    if ([[NSFileManager defaultManager] fileExistsAtPath:srcPlist]) {
+        NSString *sysDir = @"/Library/LaunchDaemons";
+        NSString *sysPlist = [sysDir stringByAppendingPathComponent:kLaunchdPlistName];
+        if (![[NSFileManager defaultManager] fileExistsAtPath:sysPlist]) {
+            /* 尝试直接复制（no-sandbox 可能允许写入） */
+            NSError *sysCopyErr = nil;
+            BOOL sysOk = [[NSFileManager defaultManager] copyItemAtPath:srcPlist
+                                                                  toPath:sysPlist
+                                                                   error:&sysCopyErr];
+            if (sysOk) {
+                NSLog(@"[TrollShot] plist 已复制到系统 LaunchDaemons 目录");
+            } else {
+                NSLog(@"[TrollShot] 无法复制到系统 LaunchDaemons（权限不足）: %@", sysCopyErr.localizedDescription);
+            }
+        }
+    }
+
     return YES;
 }
 
@@ -338,6 +365,37 @@
                                      userInfo:@{NSLocalizedDescriptionKey : @"launchctl 加载失败，请检查 /var/mobile/trollshot/trollshotd.log"}];
         }
         return NO;
+    }
+
+    /* 越狱环境：系统级 plist 不存在，尝试用用户级 plist 通过 launchctl 加载
+     * plist 中指定了 UserName=root，launchd 可能以 root 启动 daemon
+     * 这需要先 stop 旧进程，否则端口冲突 */
+    NSString *userPlist = [self installedPlistPath];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:userPlist]) {
+        /* 先清理旧进程 */
+        [self killDaemonProcesses];
+        [NSThread sleepForTimeInterval:0.3];
+
+        /* 先 unload 旧实例（如果存在） */
+        [self spawnCommand:@"/bin/launchctl" arguments:@[@"unload", userPlist]];
+        [NSThread sleepForTimeInterval:0.2];
+
+        /* 尝试 bootstrap system（新语法，以 root 域加载） */
+        int ret = [self spawnCommand:@"/bin/launchctl" arguments:@[@"bootstrap", @"system", userPlist]];
+        if (ret != 0) {
+            /* 旧语法兜底 */
+            ret = [self spawnCommand:@"/bin/launchctl" arguments:@[@"load", @"-w", userPlist]];
+        }
+
+        if (ret == 0) {
+            /* 等待端口就绪 */
+            for (int i = 0; i < 20; i++) {
+                if ([self isDaemonRunning]) return YES;
+                [NSThread sleepForTimeInterval:0.1];
+            }
+        }
+        /* launchctl 失败，继续尝试 posix_spawn 兜底 */
+        NSLog(@"[TrollShot] launchctl 加载用户级 plist 失败，回退到 posix_spawn");
     }
 
     /* TrollStore 环境：直接从 .app bundle 启动 daemon（不复制到外部路径，保持签名有效） */
