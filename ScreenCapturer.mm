@@ -28,13 +28,11 @@
 #import <unistd.h>
 #import "TSLogger.h"
 
-/* 调试模式才输出日志，避免非调试模式下产生大量日志
- * 同时写入 syslog（系统日志）和 TSLogger（TrollShot.log 文件） */
+/* 调试模式才输出 syslog，避免非调试模式下产生大量系统日志
+ * 注意：TSLog 只写 syslog（系统日志），ScreenCapturer 关键诊断同时手动写 TSLogger（TrollShot.log） */
 #define TSLog(priority, fmt, ...) do { \
-    if ([[TSLogger sharedLogger] debugEnabled]) { \
+    if ([[TSLogger sharedLogger] debugEnabled]) \
         syslog(priority, fmt, ##__VA_ARGS__); \
-        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@(fmt), ##__VA_ARGS__]]; \
-    } \
 } while(0)
 
 /* 诊断全局变量 */
@@ -137,14 +135,17 @@ static BOOL DetectJailbreak(void) {
 
     g_isJailbreakMode = DetectJailbreak();
     TSLog(LOG_NOTICE, "[TrollShot] 越狱检测: g_isJailbreakMode=%d, uid=%d", g_isJailbreakMode, getuid());
+    [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"越狱检测: mode=%d, uid=%d", g_isJailbreakMode, getuid()]];
 
     if (g_isJailbreakMode) {
         /* 越狱模式：尝试 framebuffer 直读 */
         mUseFramebuffer = [self setupFramebufferDirectRead];
         if (mUseFramebuffer) {
             TSLog(LOG_NOTICE, "[TrollShot] 越狱模式: framebuffer 直读初始化成功");
+            [[TSLogger sharedLogger] log:@"截图模式：越狱 IOMobileFramebuffer 直读"];
         } else {
             TSLog(LOG_NOTICE, "[TrollShot] framebuffer 直读失败，降级为 CARenderServer");
+            [[TSLogger sharedLogger] log:@"截图模式：越狱检测到但framebuffer失败，降级为CARenderServer"];
             g_isJailbreakMode = NO;
         }
     }
@@ -152,6 +153,9 @@ static BOOL DetectJailbreak(void) {
     if (!mUseFramebuffer) {
         /* 非越狱路径：创建 IOSurface + accelerator（原逻辑完全不变） */
         [self setupCARenderServer];
+        if (!g_isJailbreakMode) {
+            [[TSLogger sharedLogger] log:@"截图模式：非越狱 CARenderServer"];
+        }
     }
 
     return self;
