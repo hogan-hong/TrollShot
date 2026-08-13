@@ -68,9 +68,25 @@ static BOOL DetectJailbreak(void) {
             result = YES;
             return;
         }
-        /* 常见越狱标记 */
+        /* rootless 越狱标记（Dopamine/palera1n 等） */
         if (access("/var/jb", F_OK) == 0 || access("/.bootstrapped", F_OK) == 0 ||
             access("/var/binpack", F_OK) == 0) {
+            result = YES;
+            return;
+        }
+        /* rootful 越狱标记（checkra1n/unc0ver 等，以 mobile 运行但设备已越狱） */
+        if (access("/Library/MobileSubstrate/MobileSubstrate.dylib", F_OK) == 0 ||
+            access("/usr/lib/substitute-loader.dylib", F_OK) == 0 ||
+            access("/usr/lib/libsubstitute.0.dylib", F_OK) == 0 ||
+            access("/Applications/Cydia.app", F_OK) == 0 ||
+            access("/Applications/Sileo.app", F_OK) == 0 ||
+            access("/private/var/lib/apt", F_OK) == 0 ||
+            access("/usr/sbin/sshd", F_OK) == 0) {
+            result = YES;
+            return;
+        }
+        /* Substitute 注入检测（dlsym 检查 MSHookFunction 符号） */
+        if (dlsym(RTLD_DEFAULT, "MSHookFunction") != NULL) {
             result = YES;
             return;
         }
