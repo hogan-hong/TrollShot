@@ -59,6 +59,16 @@ int main(int argc, const char *argv[]) {
         }
         gPort = port;
 
+        /* 如果命令行没有 --debug，读取标志文件（越狱模式下 daemon 由 launchd 启动，无法传 --debug） */
+        if (!gDebug) {
+            NSString *flagContent = [NSString stringWithContentsOfFile:@"/var/mobile/trollshot/debug_mode"
+                                                              encoding:NSUTF8StringEncoding
+                                                                 error:nil];
+            if ([flagContent stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] isEqualToString:@"1"]) {
+                gDebug = YES;
+            }
+        }
+
         /* 调试模式开启时才写日志 */
         [TSLogger sharedLogger].debugEnabled = gDebug;
 

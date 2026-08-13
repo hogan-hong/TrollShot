@@ -52,13 +52,26 @@
     return [[content stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] isEqualToString:@"1"];
 }
 
-/* 设置调试模式标志，写入标志文件 */
-+ (void)setDebugMode:(BOOL)enabled {
+/* 设置调试模式标志，写入标志文件。返回是否写入成功 */
++ (BOOL)setDebugMode:(BOOL)enabled {
+    /* 确保目录存在（越狱模式下可能尚未创建） */
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:kDaemonDestDir]) {
+        [fm createDirectoryAtPath:kDaemonDestDir
+              withIntermediateDirectories:YES
+                               attributes:nil
+                                    error:nil];
+    }
     NSString *content = enabled ? @"1" : @"0";
-    [content writeToFile:kDebugFlagFile
-              atomically:YES
-                encoding:NSUTF8StringEncoding
-                   error:nil];
+    NSError *writeErr = nil;
+    BOOL ok = [content writeToFile:kDebugFlagFile
+                        atomically:YES
+                          encoding:NSUTF8StringEncoding
+                             error:&writeErr];
+    if (!ok) {
+        NSLog(@"[TrollShot] setDebugMode(%d) 写文件失败: %@", enabled, writeErr);
+    }
+    return ok;
 }
 
 /* 清空日志文件 */

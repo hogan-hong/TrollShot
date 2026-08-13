@@ -163,13 +163,21 @@
                                                                        message:@"将开始记录运行日志。是否同时清空旧的日志文件？"
                                                                 preferredStyle:UIAlertControllerStyleActionSheet];
         [alert addAction:[UIAlertAction actionWithTitle:@"开启并清空日志" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-            [TrollShotManager setDebugMode:YES];
+            BOOL ok = [TrollShotManager setDebugMode:YES];
+            if (!ok) {
+                [self showDebugWriteError];
+                return;
+            }
             [TrollShotManager clearLogFile];
             [self restartDaemonIfNeeded];
             [self refreshUI];
         }]];
         [alert addAction:[UIAlertAction actionWithTitle:@"开启（保留旧日志）" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-            [TrollShotManager setDebugMode:YES];
+            BOOL ok = [TrollShotManager setDebugMode:YES];
+            if (!ok) {
+                [self showDebugWriteError];
+                return;
+            }
             [self restartDaemonIfNeeded];
             [self refreshUI];
         }]];
@@ -177,10 +185,23 @@
         [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
     } else {
         /* 关闭调试模式 */
-        [TrollShotManager setDebugMode:NO];
+        BOOL ok = [TrollShotManager setDebugMode:NO];
+        if (!ok) {
+            [self showDebugWriteError];
+            return;
+        }
         [self restartDaemonIfNeeded];
         [self refreshUI];
     }
+}
+
+/* 调试模式标志文件写入失败时弹出提示 */
+- (void)showDebugWriteError {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"无法切换调试模式"
+                                                                   message:@"写入 /var/mobile/trollshot/debug_mode 失败，可能是目录权限问题。请通过 SSH 手动创建目录：\nmkdir -p /var/mobile/trollshot\nchown mobile:mobile /var/mobile/trollshot"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:nil]];
+    [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
 }
 
 /* 调试模式切换后，如果 daemon 在运行则自动重启使设置生效 */

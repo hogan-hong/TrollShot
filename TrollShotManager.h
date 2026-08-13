@@ -25,7 +25,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 /* 调试模式标志读写（持久化到 /var/mobile/trollshot/debug_mode） */
 + (BOOL)isDebugMode;
-+ (void)setDebugMode:(BOOL)enabled;
++ (BOOL)setDebugMode:(BOOL)enabled;
 
 /* 清空日志文件 */
 + (void)clearLogFile;
