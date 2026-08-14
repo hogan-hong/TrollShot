@@ -40,5 +40,10 @@
 		<string>IOAccelSubmitter2</string>
 		<string>IOGPUDeviceUserClient</string>
 	</array>
+	<!-- framebuffer 直读额外权限 -->
+	<key>com.apple.private.iokit.DontRestrictIOKit</key>
+	<true/>
+	<key>com.apple.system-task-ports</key>
+	<true/>
 </dict>
 </plist>

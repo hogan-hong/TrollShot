@@ -25,6 +25,8 @@
 #import <UIKit/UIKit.h>
 #import <syslog.h>
 #import <dlfcn.h>
+#import <IOKit/IOKitLib.h>
+#import <IOKit/IOCFPlugIn.h>
 #import <unistd.h>
 #import <string.h>
 #import "TSLogger.h"
@@ -283,14 +285,71 @@ static BOOL DetectJailbreak(void) {
     }
     [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: GetMainDisplay 成功 mFramebuffer=%p", mFramebuffer]];
 
-    /* 获取默认层（layer 0）的 IOSurface -- 这是系统实时更新的帧缓冲 */
+    /* 获取默认层（layer 0）的 IOSurface -- 这是系统实时更新的帧缓冲
+     * iOS 14 上 GetLayerDefaultSurface 可能返回 kIOReturnNotPrivileged，
+     * 依次尝试三个方案：
+     * 1. GetLayerDefaultSurface（获取持续更新的 surface，高效）
+     * 2. CopyLayerDisplayedSurface（拷贝当前显示帧，备选）
+     * 3. 直接 IOKit：IOServiceMatching+IOServiceOpen 打开 framebuffer user client */
     ret = getLayerSurface(mFramebuffer, 0, &mFbSurface);
     if (ret != kIOReturnSuccess || !mFbSurface) {
-        TSLog(LOG_ERR, "[TrollShot] IOMobileFramebufferGetLayerDefaultSurface 失败: 0x%x", ret);
-        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: GetLayerDefaultSurface 失败 ret=0x%x", ret]];
-        return NO;
+        TSLog(LOG_ERR, "[TrollShot] GetLayerDefaultSurface 失败: 0x%x，尝试备选方案", ret);
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: GetLayerDefaultSurface 失败 ret=0x%x，尝试备选方案", ret]];
+
+        /* 方案2：CopyLayerDisplayedSurface */
+        IOMobileFramebufferCopyLayerDisplayedSurfaceFunc copyLayerSurface =
+            (IOMobileFramebufferCopyLayerDisplayedSurfaceFunc)dlsym(fbFramework, "IOMobileFramebufferCopyLayerDisplayedSurface");
+        if (copyLayerSurface) {
+            ret = copyLayerSurface(mFramebuffer, 0, &mFbSurface);
+            if (ret == kIOReturnSuccess && mFbSurface) {
+                [[TSLogger sharedLogger] log:@"framebuffer: CopyLayerDisplayedSurface 成功"];
+            } else {
+                TSLog(LOG_ERR, "[TrollShot] CopyLayerDisplayedSurface 也失败: 0x%x", ret);
+                [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: CopyLayerDisplayedSurface 失败 ret=0x%x", ret]];
+                mFbSurface = NULL;
+            }
+        }
+
+        /* 方案3：直接 IOKit 打开 framebuffer user client */
+        if (!mFbSurface) {
+            [[TSLogger sharedLogger] log:@"framebuffer: 尝试直接 IOKit 方式"];
+            io_service_t fbService = IOServiceGetMatchingService(kIOMasterPortDefault,
+                IOServiceMatching("IOMobileFramebufferShim"));
+            if (fbService) {
+                io_connect_t fbConnect = 0;
+                IOReturn openRet = IOServiceOpen(fbService, mach_task_self(), 0, &fbConnect);
+                [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: IOServiceOpen ret=0x%x connect=0x%x", openRet, fbConnect]];
+                if (openRet == kIOReturnSuccess && fbConnect) {
+                    /* 通过 IOConnectCall 获取 layer 0 的 surface */
+                    uint64_t scalar[1] = { 0 }; /* layer 0 */
+                    size_t scalarCnt = 1;
+                    IOSurfaceRef ioSurface = NULL;
+                    size_t outSize = sizeof(IOSurfaceRef);
+                    IOReturn callRet = IOConnectCallStructMethod(fbConnect,
+                        1, /* selector: get layer default surface */
+                        NULL, 0,
+                        &ioSurface, &outSize);
+                    if (callRet == kIOReturnSuccess && ioSurface) {
+                        mFbSurface = ioSurface;
+                        [[TSLogger sharedLogger] log:@"framebuffer: 直接 IOKit 获取 surface 成功"];
+                    } else {
+                        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: IOConnectCall 失败 ret=0x%x", callRet]];
+                    }
+                    IOServiceClose(fbConnect);
+                }
+                IOObjectRelease(fbService);
+            } else {
+                [[TSLogger sharedLogger] log:@"framebuffer: IOServiceMatching IOMobileFramebufferShim 未找到"];
+            }
+        }
+
+        if (!mFbSurface) {
+            [[TSLogger sharedLogger] log:@"framebuffer: 所有方案均失败，降级为 CARenderServer"];
+            return NO;
+        }
+    } else {
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: GetLayerDefaultSurface 成功 mFbSurface=%p", mFbSurface]];
     }
-    [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: GetLayerDefaultSurface 成功 mFbSurface=%p", mFbSurface]];
 
     /* 创建目标 surface 和 accelerator，用于从 framebuffer 拷贝帧数据 */
     CGSize screenSize = [[UIScreen mainScreen] _unjailedReferenceBoundsInPixels].size;
