@@ -61,6 +61,12 @@ TrollShot 采用类似 TrollVNC 的后台 daemon 架构：
 
 在越狱设备上通过 `.deb` 安装时，launchd plist 会自动部署到 `/Library/LaunchDaemons/com.hogan.trollshot.plist`，daemon 以 root 身份运行且 `KeepAlive=true`（被杀后自动重启）。
 
+**开机自启动**：`.deb` 安装后，设备重启（或半绑定越狱重新越狱）时 launchd 会自动加载 plist 启动 wrapper 脚本，wrapper 脚本启动时会清除运行时停止标志（`stop.flag`），确保每次开机都自动启动 daemon，无需手动打开 App。
+
+通过 App 停止服务时，daemon 写入 `stop.flag` 标志文件并退出，wrapper 脚本检测到标志后暂停重启。通过 App 重新启动服务时，App 删除 `stop.flag`，wrapper 脚本自动恢复 daemon。`stop.flag` 仅作为运行时信号，不跨重启持久化。
+
+wrapper 脚本运行日志位于 `/var/mobile/trollshot/wrapper.log`，可用于排查开机自启动问题。
+
 App 会自动检测运行环境：
 - **检测到系统级 plist（越狱）**：启动/停止通过 `launchctl bootstrap`/`bootout` 操作（兼容旧版 `load`/`unload`），不直接 `posix_spawn`
 - **未检测到（TrollStore）**：手动复制 daemon 到 `/var/mobile/trollshot/` 并 `posix_spawn` 启动
@@ -223,7 +229,7 @@ App 界面提供「调试模式」开关按钮：
 
 - **TrollStore 环境**：点击"停止服务"向 `trollshotd` 进程发送 SIGTERM，1 秒内未退出则发送 SIGKILL，最后 `killall -9` 兜底。
 - **越狱环境**：点击"停止服务"先执行 `launchctl bootout`/`unload` 卸载系统级 plist，再 kill 进程。如果权限不足会弹出错误提示，需通过 SSH 以 root 手动执行 `launchctl unload`。
-- 卸载 IPA/.deb：系统会自动删除 app bundle，已复制到 `/var/mobile/trollshot/` 的 daemon、日志和 `/var/mobile/Documents/TrollShot.log` 不会自动清理，可手动删除。越狱环境还需手动删除 `/Library/LaunchDaemons/com.hogan.trollshot.plist` 并执行 `launchctl unload`。
+- 卸载 IPA/.deb：系统会自动删除 app bundle，已复制到 `/var/mobile/trollshot/` 的 daemon、日志和 `/var/mobile/Documents/TrollShot.log` 不会自动清理，可手动删除。越狱 `.deb` 卸载时 `prerm` 脚本会自动停止 daemon 并卸载 launchd plist，无需手动清理 `/Library/LaunchDaemons/com.hogan.trollshot.plist`。
 
 ## 局限
 
@@ -231,7 +237,7 @@ App 界面提供「调试模式」开关按钮：
 - daemon 需要 root 权限才能调用私有截屏 API。
 - 越狱模式 framebuffer 直读需要设备开启 AirPlay 屏幕镜像，否则游戏防截屏会触发灰屏。
 - 需要私有 entitlement。
-- 不手动放置 launchd plist 时，设备重启后服务不会自动启动，需要重新打开应用点击"启动服务"。
+- 越狱 `.deb` 安装支持开机自启动（launchd plist + wrapper 脚本）。TrollStore IPA 安装不支持开机自启动，需手动打开 App 点击"启动服务"。
 
 ## 文件说明
 

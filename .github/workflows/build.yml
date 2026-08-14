@@ -52,7 +52,7 @@ jobs:
           plutil -p .theos/_/Library/LaunchDaemons/com.hogan.trollshot.plist || cat .theos/_/Library/LaunchDaemons/com.hogan.trollshot.plist || true
 
           echo "=== 检查 .deb 中的关键文件 ==="
-          dpkg-deb -c packages/com.hoganhong.trollshot_*.deb | grep -E "trollshotd|\.plist" || true
+          dpkg-deb -c packages/com.hoganhong.trollshot_*.deb | grep -E "trollshotd|\.plist|postinst|prerm" || true
 
           echo "=== 修改 Architecture 为 iphoneos-arm (rootful 格式) ==="
           sed -i '' 's/Architecture: iphoneos-arm64/Architecture: iphoneos-arm/' .theos/_/DEBIAN/control
@@ -63,7 +63,7 @@ jobs:
           dpkg-deb -Zgzip -b .theos/_ packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm.deb
           echo "=== 重建后的 deb 信息 ==="
           dpkg-deb -I packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm.deb
-          dpkg-deb -c packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm.deb | grep -E "trollshotd|\.plist|postinst"
+          dpkg-deb -c packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm.deb | grep -E "trollshotd|\.plist|postinst|prerm"
           echo "=== 验证 DEBIAN 脚本 ==="
           dpkg-deb --info packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm.deb || true
 

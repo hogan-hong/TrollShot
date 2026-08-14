@@ -1,0 +1,21 @@
+#!/bin/bash
+# TrollShot deb 卸载前清理
+
+echo "TrollShot: 正在停止服务..."
+
+# 卸载 launchd daemon
+launchctl bootout system/com.hogan.trollshot 2>/dev/null
+launchctl unload -w /Library/LaunchDaemons/com.hogan.trollshot.plist 2>/dev/null
+
+# 停止进程
+killall -9 trollshotd 2>/dev/null
+killall -9 trollshotd_wrapper.sh 2>/dev/null
+
+sleep 1
+
+# 清理停止标志
+rm -f /var/mobile/trollshot/stop.flag
+
+echo "TrollShot: 服务已停止"
+
+exit 0
