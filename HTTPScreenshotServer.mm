@@ -39,17 +39,15 @@ struct ClientContext {
     int clientSocket;
 };
 
-/* 客户端处理线程入口 */
+/* 客户端处理线程入口
+ * 并发 semaphore 的 acquire/release 已移入 HandleClientConnection 内部，
+ * 仅包裹 /screenshot 截图逻辑；/ping、/status 等轻量请求不受限制。 */
 static void *HandleClientThread(void *arg) {
     @autoreleasepool {
         struct ClientContext *ctx = (struct ClientContext *)arg;
         int client = ctx->clientSocket;
         free(ctx);
-        @try {
-            HandleClientConnection(client);
-        } @finally {
-            dispatch_semaphore_signal(gConcurrencySem);
-        }
+        HandleClientConnection(client);
         return NULL;
     }
 }
@@ -199,10 +197,35 @@ static void HandleClientConnection(int client) {
             return;
         }
 
+        /* 非截图路径一律 404（/ping、/status、/stop、/shutdown 已在上方处理） */
+        if (strncmp(buf, "GET /screenshot", 15) != 0) {
+            NSData *empty = [NSData data];
+            SendResponse(client, 404, nil, empty);
+            close(client);
+            [[TSLogger sharedLogger] log:@"请求路径不匹配，返回 404"];
+            return;
+        }
+
+        /* 并发限制仅作用于 /screenshot（越狱 framebuffer 直读不可并发）。
+         * 并发已满时立即返回 503 + X-Busy 头（区别于镜像未开的 503 X-Mirror-Status 头）。 */
+        if (dispatch_semaphore_wait(gConcurrencySem, DISPATCH_TIME_NOW) != 0) {
+            const char *resp = "HTTP/1.1 503 Service Unavailable\r\n"
+                "Content-Type: application/json\r\n"
+                "X-Busy: true\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+                "{\"error\":\"busy\",\"message\":\"截图请求并发已满，请稍后重试\"}";
+            send(client, resp, strlen(resp), 0);
+            close(client);
+            [[TSLogger sharedLogger] log:@"截图并发已满，返回 503"];
+            return;
+        }
+
+        @try {
         /* 解析 URL 查询参数：rotate=1 强制旋转，crop=x1,y1,x2,y2 裁剪区域 */
         BOOL doRotate = NO;
         CGRect cropRect = CGRectZero;
-        if (strncmp(buf, "GET /screenshot", 15) == 0) {
+        {
             /* 检查是否有 rotate=1 参数 */
             if (strstr(buf, "rotate=1")) {
                 doRotate = YES;
@@ -216,12 +239,6 @@ static void HandleClientConnection(int client) {
                     cropRect = CGRectMake(cx1, cy1, cx2 - cx1, cy2 - cy1);
                 }
             }
-        } else {
-            NSData *empty = [NSData data];
-            SendResponse(client, 404, nil, empty);
-            close(client);
-            [[TSLogger sharedLogger] log:@"请求路径不匹配，返回 404"];
-            return;
         }
 
         /* 越狱 framebuffer 模式：检查 AirPlay 镜像是否开启 */
@@ -281,6 +298,10 @@ static void HandleClientConnection(int client) {
         send(client, headerBytes, strlen(headerBytes), 0);
         send(client, jpeg.bytes, jpeg.length, 0);
         close(client);
+        } @finally {
+            /* 截图流程结束（含失败/镜像未开提前返回），释放并发信号量 */
+            dispatch_semaphore_signal(gConcurrencySem);
+        }
     }
 }
 
@@ -362,16 +383,9 @@ extern "C" void StartScreenshotServer(uint16_t port) {
         if (client < 0)
             continue;
 
-        /* 如果并发数已满，直接返回 503，避免无限创建线程 */
-        if (dispatch_semaphore_wait(gConcurrencySem, DISPATCH_TIME_NOW) != 0) {
-            const char *resp = "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-            send(client, resp, strlen(resp), 0);
-            close(client);
-            [[TSLogger sharedLogger] log:@"并发请求已满，返回 503"];
-            continue;
-        }
-
-        /* 每个连接用独立 pthread 处理，避免 GCD 在 daemon 里不工作 */
+        /* 每个连接用独立 pthread 处理，避免 GCD 在 daemon 里不工作。
+         * 并发 semaphore 只在 HandleClientConnection 内部作用于 /screenshot，
+         * /ping、/status 等轻量请求不受限制，避免截图期间 App 状态误判为"未运行"。 */
         struct ClientContext *ctx = (struct ClientContext *)malloc(sizeof(struct ClientContext));
         ctx->clientSocket = client;
         pthread_t clientThread;
