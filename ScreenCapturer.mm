@@ -649,7 +649,7 @@ static BOOL DetectJailbreak(void) {
         mKeepAliveTimer = nil;
     }
     if (mKeepAliveSurface) {
-        IOSurfaceRelease(mKeepAliveSurface);
+        CFRelease(mKeepAliveSurface);
     }
 }
 
