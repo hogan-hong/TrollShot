@@ -39,6 +39,7 @@ jobs:
           ls -la $THEOS/sdks/
 
       - name: 构建 deb（越狱版：framebuffer 直读，单线程）
+        id: build_deb
         run: |
           set -o pipefail
           export THEOS=$GITHUB_WORKSPACE/theos
@@ -72,6 +73,7 @@ jobs:
           cp -p packages/*.deb artifacts/
 
       - name: 构建 ipa（非越狱版：CARenderServer，4 线程）
+        id: build_ipa
         run: |
           set -o pipefail
           export THEOS=$GITHUB_WORKSPACE/theos
@@ -117,8 +119,9 @@ jobs:
           path: build.log
           if-no-files-found: ignore
 
+      # 按各自构建步骤的结果上传：ipa 失败不影响 deb 产物，反之亦然
       - name: 上传 IPA 构建产物
-        if: success()
+        if: always() && steps.build_ipa.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: TrollShot-ipa
@@ -126,7 +129,7 @@ jobs:
           if-no-files-found: error
 
       - name: 上传 deb 越狱包
-        if: success()
+        if: always() && steps.build_deb.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: TrollShot-deb

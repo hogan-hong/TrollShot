@@ -34,6 +34,9 @@ trollshotd_CODESIGN_FLAGS = -STrollShot.entitlements
 include $(THEOS_MAKE_PATH)/application.mk
 include $(THEOS_MAKE_PATH)/tool.mk
 
+# 布局目录命名为 layout-deb 而非 layout：Theos 对名为 layout 的目录有内建行为，
+# 会无条件将其内容自动 stage 进所有包（包括 ipa 构建），导致 prerm 以 644 权限
+# 混入而打包失败。改名后完全由下方 Makefile 逻辑控制，仅 deb 构建复制。
 # 打包前把 daemon 二进制和 launchd plist 复制进 .app bundle，
 # 这样 TrollShotManager 才能从 [NSBundle mainBundle] 里找到它们。
 # 同时确保 Info.plist 被复制进 .app bundle（Theos 有时不会自动处理）。
@@ -49,19 +52,19 @@ before-package::
 	fi
 	@chmod +x "$(THEOS_STAGING_DIR)/Applications/TrollShot.app/trollshotd"
 ifneq ($(FLAVOR),ipa)
-	@cp -p layout/Library/LaunchDaemons/com.hogan.trollshot.plist "$(THEOS_STAGING_DIR)/Applications/TrollShot.app/com.hogan.trollshot.plist"
+	@cp -p layout-deb/Library/LaunchDaemons/com.hogan.trollshot.plist "$(THEOS_STAGING_DIR)/Applications/TrollShot.app/com.hogan.trollshot.plist"
 	@mkdir -p "$(THEOS_STAGING_DIR)/Library/LaunchDaemons"
-	@cp -p layout/Library/LaunchDaemons/com.hogan.trollshot.plist "$(THEOS_STAGING_DIR)/Library/LaunchDaemons/com.hogan.trollshot.plist"
+	@cp -p layout-deb/Library/LaunchDaemons/com.hogan.trollshot.plist "$(THEOS_STAGING_DIR)/Library/LaunchDaemons/com.hogan.trollshot.plist"
 	@mkdir -p "$(THEOS_STAGING_DIR)/DEBIAN"
-	@if [ -f "layout/DEBIAN/postinst" ]; then \
-		cp -p "layout/DEBIAN/postinst" "$(THEOS_STAGING_DIR)/DEBIAN/postinst"; \
+	@if [ -f "layout-deb/DEBIAN/postinst" ]; then \
+		cp -p "layout-deb/DEBIAN/postinst" "$(THEOS_STAGING_DIR)/DEBIAN/postinst"; \
 		chmod 755 "$(THEOS_STAGING_DIR)/DEBIAN/postinst"; \
 	fi
-	@if [ -f "layout/DEBIAN/prerm" ]; then \
-		cp -p "layout/DEBIAN/prerm" "$(THEOS_STAGING_DIR)/DEBIAN/prerm"; \
+	@if [ -f "layout-deb/DEBIAN/prerm" ]; then \
+		cp -p "layout-deb/DEBIAN/prerm" "$(THEOS_STAGING_DIR)/DEBIAN/prerm"; \
 		chmod 755 "$(THEOS_STAGING_DIR)/DEBIAN/prerm"; \
 	fi
 	@mkdir -p "$(THEOS_STAGING_DIR)/usr/bin"
-	@cp -p "layout/usr/bin/trollshotd_wrapper.sh" "$(THEOS_STAGING_DIR)/usr/bin/trollshotd_wrapper.sh"
+	@cp -p layout-deb/usr/bin/trollshotd_wrapper.sh "$(THEOS_STAGING_DIR)/usr/bin/trollshotd_wrapper.sh"
 	@chmod 755 "$(THEOS_STAGING_DIR)/usr/bin/trollshotd_wrapper.sh"
 endif
