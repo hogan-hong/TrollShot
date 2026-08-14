@@ -26,22 +26,22 @@ killall -9 trollshotd_wrapper.sh 2>/dev/null
 sleep 1
 
 # 加载 LaunchDaemon
-# 优先使用 bootstrap（iOS 14+ 新语法），失败则回退到 load -w（旧语法）
-launchctl bootstrap system /Library/LaunchDaemons/com.hogan.trollshot.plist 2>/dev/null
-if [ $? -ne 0 ]; then
-    launchctl load -w /Library/LaunchDaemons/com.hogan.trollshot.plist 2>/dev/null
+# 注意：iOS 14.1 越狱环境实测 launchctl bootstrap 返回 0 但 job 并未真正加载（假成功），
+# 因此优先使用 load -w（实测可靠），并以 launchctl list 实际状态为准验证，失败再试 bootstrap。
+launchctl load -w /Library/LaunchDaemons/com.hogan.trollshot.plist 2>/dev/null
+if ! launchctl list 2>/dev/null | grep -q com.hogan.trollshot; then
+    launchctl bootstrap system /Library/LaunchDaemons/com.hogan.trollshot.plist 2>/dev/null
 fi
 
 # 等待端口就绪
 sleep 2
 
-# 检查 daemon 是否在运行
+# 检查 daemon 是否在运行（以 launchctl list 实际状态为准）
 if launchctl list 2>/dev/null | grep -q com.hogan.trollshot; then
     echo "TrollShot: daemon 已启动（开机后将自动启动）"
 else
     echo "TrollShot: daemon 未自动启动，请手动执行："
-    echo "  launchctl bootstrap system /Library/LaunchDaemons/com.hogan.trollshot.plist"
-    echo "  或：launchctl load -w /Library/LaunchDaemons/com.hogan.trollshot.plist"
+    echo "  launchctl load -w /Library/LaunchDaemons/com.hogan.trollshot.plist"
 fi
 
 exit 0
