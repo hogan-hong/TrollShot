@@ -284,6 +284,10 @@ static BOOL DetectJailbreak(void) {
         }
     } else {
         [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: GetLayerDefaultSurface 成功 mFbSurface=%p", mFbSurface]];
+        OSType fbFormat = IOSurfaceGetPixelFormat(mFbSurface);
+        TSLog(LOG_NOTICE, "[TrollShot] framebuffer surface 像素格式: 0x%x ('%c%c%c%c')", fbFormat,
+              (fbFormat >> 24) & 0xFF, (fbFormat >> 16) & 0xFF, (fbFormat >> 8) & 0xFF, fbFormat & 0xFF);
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: 源 surface 像素格式=0x%x 尺寸=%zux%zu", fbFormat, IOSurfaceGetWidth(mFbSurface), IOSurfaceGetHeight(mFbSurface)]];
     }
 
 /* 创建目标 surface 和 accelerator，用于从 framebuffer 拷贝帧数据 */
@@ -398,8 +402,17 @@ static BOOL DetectJailbreak(void) {
         mLastCaptureTime = now;
     }
 
-    /* 从源 surface 拷贝到目标 surface（两种模式共用） */
+    /* 从源 surface 拷贝到目标 surface（两种模式共用）
+     * framebuffer 直读时锁定源 surface，防止 GPU 同时更新导致花屏 */
+    BOOL needsLock = (mUseFramebuffer && srcSurface == mFbSurface);
+    uint32_t lockSeed = 0;
+    if (needsLock) {
+        IOSurfaceLock(srcSurface, 0, &lockSeed);
+    }
     IOReturn accelRet = IOSurfaceAcceleratorTransferSurface(mAccelerator, srcSurface, mScreenSurface, NULL, NULL, NULL, NULL);
+    if (needsLock) {
+        IOSurfaceUnlock(srcSurface, 0, &lockSeed);
+    }
     if (accelRet != kIOReturnSuccess) {
         if (error)
             *error = [NSError errorWithDomain:@"TrollShot" code:1 userInfo:@{NSLocalizedDescriptionKey : @"IOSurface 加速器转换失败"}];
