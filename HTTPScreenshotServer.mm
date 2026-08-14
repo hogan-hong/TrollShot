@@ -137,6 +137,36 @@ static void HandleClientConnection(int client) {
             return;
         }
 
+        /* /status：返回截图服务和镜像状态（JSON） */
+        if (strncmp(buf, "GET /status", 11) == 0) {
+            BOOL mirror = [ScreenCapturer isMirrorActive];
+            BOOL needsMirror = [ScreenCapturer needsMirror];
+            NSString *mode;
+            if (g_isJailbreakMode) {
+                mode = g_useFramebuffer ? @"framebuffer" : @"carender";
+            } else {
+                mode = @"carender";
+            }
+            /* status: ok = 可正常截图; need_mirror = 需要开启AirPlay镜像; fb_fail = framebuffer失败降级 */
+            NSString *status;
+            if (g_isJailbreakMode && g_useFramebuffer && !mirror) {
+                status = @"need_mirror";
+            } else {
+                status = @"ok";
+            }
+            NSString *json = [NSString stringWithFormat:
+                @"{\"mode\":\"%@\",\"jailbreak\":%@,\"mirror\":%@,\"needs_mirror\":%@,\"status\":\"%@\"}",
+                mode,
+                g_isJailbreakMode ? @"true" : @"false",
+                mirror ? @"true" : @"false",
+                needsMirror ? @"true" : @"false",
+                status];
+            NSData *body = [json dataUsingEncoding:NSUTF8StringEncoding];
+            SendResponse(client, 200, @"application/json", body);
+            close(client);
+            return;
+        }
+
         /* /stop：daemon 退出但保留 launchd，wrapper 通过标志文件决定是否重启
          * 用于 app 停止/启动服务，不需要 root 权限操作 launchctl */
         if (strncmp(buf, "GET /stop", 9) == 0) {
@@ -191,6 +221,20 @@ static void HandleClientConnection(int client) {
             SendResponse(client, 404, nil, empty);
             close(client);
             [[TSLogger sharedLogger] log:@"请求路径不匹配，返回 404"];
+            return;
+        }
+
+        /* 越狱 framebuffer 模式：检查 AirPlay 镜像是否开启 */
+        if (g_isJailbreakMode && g_useFramebuffer && ![ScreenCapturer isMirrorActive]) {
+            const char *resp = "HTTP/1.1 503 Service Unavailable\r\n"
+                "Content-Type: application/json\r\n"
+                "Connection: close\r\n"
+                "X-Mirror-Status: inactive\r\n"
+                "\r\n"
+                "{\"error\":\"airplay_mirror_not_active\",\"message\":\"AirPlay屏幕镜像未开启，无法截图\"}";
+            send(client, resp, strlen(resp), 0);
+            close(client);
+            [[TSLogger sharedLogger] log:@"截图失败：AirPlay镜像未开启，返回503"];
             return;
         }
 
@@ -251,7 +295,7 @@ extern "C" void StartScreenshotServer(uint16_t port) {
     }
     NSString *modeStr;
     if (g_isJailbreakMode) {
-        modeStr = g_useFramebuffer ? @"越狱 IOMobileFramebuffer 直读" : @"越狱 CARenderServer（framebuffer降级，串行）";
+        modeStr = g_useFramebuffer ? @"越狱 framebuffer 直读（需AirPlay镜像）" : @"越狱 CARenderServer（framebuffer降级）";
     } else {
         modeStr = @"非越狱 CARenderServer";
     }

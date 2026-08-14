@@ -24,12 +24,18 @@ TrollShot 根据运行环境自动选择截图方式：
 
 此方案参考 [screendump](https://github.com/cosmosgenius/screendump) 的 fix14 实现，直接读取 framebuffer，完全绕过 mach IPC 链路，避免越狱注入（Substitute）对 `CARenderServerRenderDisplay` 的 hook 开销导致设备卡死。
 
+**重要：越狱模式下需要设备开启 AirPlay 屏幕镜像。** framebuffer 直读绕过 SpringBoard，游戏防截屏保护会触发（画面变灰）。开启 AirPlay 屏幕镜像后，`UIScreen.isCaptured` 变为 `YES`，系统感知到屏幕正在被录制，游戏正常渲染彩色画面。AirPlay 接收端使用修改后的 UxPlay（`-vs 0` 丢弃视频流，不占服务器资源），设备端仅编码 16x16@1fps，开销极低。
+
+截图时实时检查 `UIScreen.isCaptured` 状态，镜像未开启时返回 HTTP 503 错误。
+
 ### 非越狱模式（TrollStore，以 mobile 用户运行）
 
 1. 通过私有 API `CARenderServerRenderDisplay` 将屏幕内容渲染到 `IOSurface`。
 2. 通过 `IOSurfaceAccelerator` 转换 surface 格式。
 3. 将 surface 零拷贝包装成 `CVPixelBuffer`，再用 `CoreImage` / `ImageIO` 编码为 JPEG。
 4. HTTP 最大并发 4（原值）。
+
+此方案与 TrollVNC 截屏方式相同，`CARenderServerRenderDisplay` 走 SpringBoard 渲染管道，系统感知到截屏，游戏防截屏不会触发，无需 AirPlay 镜像。
 
 ### 共通优化
 
@@ -42,8 +48,8 @@ TrollShot 根据运行环境自动选择截图方式：
 
 TrollShot 采用类似 TrollVNC 的后台 daemon 架构：
 
-- `TrollShot.app` — 用户界面，负责"启动/停止" daemon
-- `trollshotd` — 后台守护进程，真正跑 HTTP 截图服务
+- `TrollShot.app` - 用户界面，负责"启动/停止" daemon
+- `trollshotd` - 后台守护进程，真正跑 HTTP 截图服务
 
 构建时，`Makefile` 的 `before-package` 钩子会把 `trollshotd` 和 `com.hogan.trollshot.plist` 一起复制进 `TrollShot.app` bundle。GitHub Actions 再把 `.app` 打包成标准 IPA（`Payload/TrollShot.app`）。
 
@@ -102,6 +108,18 @@ make clean package FINALPACKAGE=1
 4. 等待界面显示"服务状态：运行中"。
 5. 在同一局域网内的另一台设备上访问 `http://<设备IP>:6688/screenshot`。
 
+### 越狱模式使用流程
+
+越狱设备使用 framebuffer 直读模式时，需要先开启 AirPlay 屏幕镜像：
+
+1. 在局域网内部署 UxPlay 服务器（Docker 方式，支持多设备同时连接）。
+2. iPhone 打开"控制中心" -> "屏幕镜像" -> 选择 `TrollShot-AirPlay`。
+3. 开启 TrollShot 服务。
+4. 访问 `http://<设备IP>:6688/status` 确认镜像状态为 `ok`。
+5. 访问 `http://<设备IP>:6688/screenshot` 获取彩色截图。
+
+> 未开启 AirPlay 镜像时，截图请求返回 HTTP 503，响应头包含 `X-Mirror-Status: inactive`。
+
 ### API 接口
 
 ```
@@ -133,9 +151,34 @@ GET /screenshot?rotate=1&crop=0,0,667,750
 # 健康检查（返回 pong）
 GET /ping
 
+# 服务状态（返回 JSON，含镜像状态）
+GET /status
+
 # 停止 daemon（越狱环境，daemon 自行卸载 launchd 并退出）
 GET /shutdown
 ```
+
+#### /status 响应
+
+返回 JSON 格式的服务状态：
+
+```json
+{
+  "mode": "framebuffer",
+  "jailbreak": true,
+  "mirror": true,
+  "needs_mirror": true,
+  "status": "ok"
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `mode` | 截图模式：`framebuffer`（越狱直读）、`carender`（CARenderServer） |
+| `jailbreak` | 是否越狱环境 |
+| `mirror` | AirPlay 屏幕镜像是否活跃（`UIScreen.isCaptured`） |
+| `needs_mirror` | 是否需要 AirPlay 镜像才能正常截图 |
+| `status` | 综合状态：`ok`（正常）、`need_mirror`（需要开启AirPlay镜像） |
 
 #### 自动横竖屏检测
 
@@ -186,6 +229,7 @@ App 界面提供「调试模式」开关按钮：
 
 - 需要 TrollStore 或越狱环境；普通签名设备无法运行。
 - daemon 需要 root 权限才能调用私有截屏 API。
+- 越狱模式 framebuffer 直读需要设备开启 AirPlay 屏幕镜像，否则游戏防截屏会触发灰屏。
 - 需要私有 entitlement。
 - 不手动放置 launchd plist 时，设备重启后服务不会自动启动，需要重新打开应用点击"启动服务"。
 
@@ -193,8 +237,8 @@ App 界面提供「调试模式」开关按钮：
 
 ### 核心源码
 
-- `ScreenCapturer.{h,mm}` - 通过私有 API 截屏，越狱模式用 IOMobileFramebuffer 直读 framebuffer，非越狱模式用 CARenderServerRenderDisplay；包含脏帧检测、帧缓存、旋转（FBSOrientationObserver）和裁剪逻辑
-- `HTTPScreenshotServer.{h,mm}` - 迷你 HTTP 服务器，解析 `rotate` / `crop` 查询参数
+- `ScreenCapturer.{h,mm}` - 通过私有 API 截屏，越狱模式用 IOMobileFramebuffer 直读（需 AirPlay 镜像维持 isCaptured），非越狱模式用 CARenderServerRenderDisplay；包含脏帧检测、帧缓存、旋转（FBSOrientationObserver）和裁剪逻辑
+- `HTTPScreenshotServer.{h,mm}` - 迷你 HTTP 服务器，解析 `rotate` / `crop` 查询参数，提供 `/status` 镜像状态检查
 - `trollshotd.mm` - 后台 daemon 入口，解析 `--debug` 参数
 - `TrollShotManager.{h,m}` - 启动/停止 daemon 的管理逻辑，调试模式标志读写，stdout/stderr 重定向控制
 - `TSLogger.{h,m}` - 日志管理器，懒加载写入 `/var/mobile/Documents/TrollShot.log`，受 `debugEnabled` 控制
@@ -207,12 +251,3 @@ App 界面提供「调试模式」开关按钮：
 - `include-spi/IOKitSPI.h` - IOKit 私有接口声明
 - `include-spi/IOSurfaceSPI.h` - IOSurface 私有接口声明（含 IOSurfaceGetSeed 脏帧检测）
 - `include-spi/UIScreen+Private.h` - UIScreen 私有方法声明
-
-### 构建与配置
-
-- `Makefile` - Theos 构建配置（链接 FrontBoardServices 私有框架）
-- `control` - Theos 包控制文件（包名、版本、依赖）
-- `TrollShot.entitlements` - 必需的私有 entitlement（`com.apple.private.security.no-container` 等）
-- `Info.plist` - 应用配置
-- `layout/Library/LaunchDaemons/com.hogan.trollshot.plist` - 可选的 launchd 配置（开机自启）
-- `Resources/` - 应用图标资源

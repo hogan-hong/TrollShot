@@ -45,6 +45,8 @@ size_t g_lastFinalHeight = 0;
 BOOL g_lastRotated = NO;
 BOOL g_isJailbreakMode = NO;
 BOOL g_useFramebuffer = NO;
+BOOL g_needsMirror = NO;  /* 越狱模式：是否需要 AirPlay 镜像维持 isCaptured */
+
 
 /* 越狱环境下尝试提升为 root 权限
  * rootful 越狱（checkra1n/unc0ver）内核补丁允许 setuid(0)
@@ -112,7 +114,6 @@ static BOOL DetectJailbreak(void) {
 }
 
 @interface ScreenCapturer (Private)
-- (void)startCaptureKeepAlive;
 - (void)setupCARenderServer;
 - (BOOL)setupFramebufferDirectRead;
 @end
@@ -139,13 +140,6 @@ static BOOL DetectJailbreak(void) {
     BOOL mHasCachedFrame;
     NSTimeInterval mLastCaptureTime;  /* 上次截图时间（CARenderServer 模式时间缓存） */
 
-    /* 越狱混合模式：CARenderServer keep-alive（维持 UIScreen.isCaptured 状态）
-     * 后台定时器定期调用 CARenderServerRenderDisplay，让系统感知到有人在截屏，
-     * 游戏防截屏保护不会触发（与 TrollVNC 持续渲染相同原理）
-     * 实际截图走 framebuffer 直读（快），keep-alive 只维持 captured 标志 */
-    IOSurfaceRef mKeepAliveSurface;     /* keep-alive 专用 surface（不用于截图） */
-    dispatch_source_t mKeepAliveTimer;  /* 后台定时器 */
-
     /* 线程安全锁 */
     NSLock *mLock;
 }
@@ -157,6 +151,14 @@ static BOOL DetectJailbreak(void) {
         _inst = [[self alloc] init];
     });
     return _inst;
+}
+
++ (BOOL)needsMirror {
+    return g_needsMirror;
+}
+
++ (BOOL)isMirrorActive {
+    return [[UIScreen mainScreen] isCaptured];
 }
 
 - (instancetype)init {
@@ -186,92 +188,53 @@ static BOOL DetectJailbreak(void) {
     [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"越狱检测: mode=%d, uid=%d", g_isJailbreakMode, getuid()]];
 
     if (g_isJailbreakMode) {
-        /* 越狱混合模式：framebuffer 直读（快）+ CARenderServer keep-alive（维持 captured 标志）
+        /* 越狱模式：纯 framebuffer 直读
          *
          * 原理：
-         * 1. framebuffer 直读绕过 SpringBoard，系统不知道有人在截屏，游戏防截屏触发（画面变灰）
-         * 2. CARenderServer 走 SpringBoard 渲染管道，系统感知到截屏，游戏正常渲染
-         * 3. 解决方案：后台定时器每 2 秒调一次 CARenderServerRenderDisplay 维持 captured 标志
-         *    实际截图走 framebuffer 直读（快速、低开销）
-         * 4. TrollVNC 也是持续调用 CARenderServerRenderDisplay 维持 captured 状态
-         *    我们用低频（0.5fps）keep-alive 即可，不需要 30fps 持续渲染
+         * 1. IOMobileFramebuffer 直读系统帧缓冲，2-3ms/张，完全绕过 mach IPC
+         * 2. framebuffer 直读绕过 SpringBoard，游戏防截屏会触发（画面变灰）
+         * 3. 解决方案：设备开启 AirPlay 屏幕镜像，UIScreen.isCaptured = YES
+         *    AirPlay 镜像让系统感知到屏幕正在被录制，游戏正常渲染彩色画面
+         * 4. UxPlay 服务器用 -vs 0 丢弃视频流，不占服务器资源
+         *    设备端只编码 16x16@1fps，开销极低
          *
-         * 仍保留 root 权限提升（framebuffer 直读需要 root 权限）
-         * 仍保持越狱模式标记（串行执行，避免 Substitute hook 并发 mach IPC 开销） */
+         * 启动时检查 isCaptured 状态，未开启镜像则标记需要镜像
+         * 截图时实时检查 isCaptured，镜像断开则返回错误 */
         if (getuid() != 0) {
             TryEscalateToRoot();
             [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"权限提升: uid=%d", getuid()]];
         }
 
-        /* 尝试 framebuffer 直读（用于实际截图，快速） */
+        /* 检查 AirPlay 镜像状态 */
+        BOOL mirrorActive = [[UIScreen mainScreen] isCaptured];
+        TSLog(LOG_NOTICE, "[TrollShot] AirPlay 镜像状态: isCaptured=%d", mirrorActive);
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"AirPlay 镜像状态: isCaptured=%d", mirrorActive]];
+
+        /* 尝试 framebuffer 直读 */
         mUseFramebuffer = [self setupFramebufferDirectRead];
         g_useFramebuffer = mUseFramebuffer;
+        g_needsMirror = mUseFramebuffer;  /* framebuffer 模式需要 AirPlay 镜像 */
 
         if (mUseFramebuffer) {
-            /* framebuffer 直读成功，同时启动 CARenderServer keep-alive 维持 captured 标志 */
-            [self setupCARenderServer];
-            [self startCaptureKeepAlive];
-
-            TSLog(LOG_NOTICE, "[TrollShot] 越狱混合模式: framebuffer 直读 + CARenderServer keep-alive");
-            [[TSLogger sharedLogger] log:@"截图模式：越狱混合（framebuffer直读 + CARenderServer保活）"];
+            TSLog(LOG_NOTICE, "[TrollShot] 越狱模式: framebuffer 直读（需 AirPlay 镜像）");
+            if (mirrorActive) {
+                [[TSLogger sharedLogger] log:@"截图模式：越狱 framebuffer 直读（镜像已开启）"];
+            } else {
+                [[TSLogger sharedLogger] log:@"截图模式：越狱 framebuffer 直读（警告：AirPlay镜像未开启，截图将灰屏）"];
+            }
         } else {
-            /* framebuffer 失败，降级为纯 CARenderServer（与非越狱相同） */
-            TSLog(LOG_NOTICE, "[TrollShot] framebuffer 直读失败，降级为纯 CARenderServer");
-            [[TSLogger sharedLogger] log:@"截图模式：越狱但framebuffer降级CARenderServer（串行）"];
+            /* framebuffer 失败，降级为 CARenderServer */
+            TSLog(LOG_NOTICE, "[TrollShot] framebuffer 直读失败，降级为 CARenderServer");
+            [[TSLogger sharedLogger] log:@"截图模式：越狱 framebuffer降级 CARenderServer"];
             [self setupCARenderServer];
         }
-        /* 不重置 g_isJailbreakMode，保持串行执行 */
     } else {
-        /* 非越狱模式：纯 CARenderServer */
+        /* 非越狱模式：纯 CARenderServer（与 TrollVNC 相同） */
         [self setupCARenderServer];
         [[TSLogger sharedLogger] log:@"截图模式：非越狱 CARenderServer"];
     }
 
     return self;
-}
-
-/* ============================================================
- * 启动 CARenderServer keep-alive 定时器
- * 每 2 秒调用 CARenderServerRenderDisplay 一次，维持 UIScreen.isCaptured = YES
- * 让游戏防截屏保护不触发（与 TrollVNC 持续渲染相同原理，但频率极低）
- * ============================================================ */
-- (void)startCaptureKeepAlive {
-    if (mKeepAliveTimer) {
-        return; /* 已启动 */
-    }
-
-    /* 使用 mSrcSurface 作为 keep-alive surface（setupCARenderServer 已创建） */
-    if (!mSrcSurface) {
-        TSLog(LOG_ERR, "[TrollShot] keep-alive: mSrcSurface 未初始化，无法启动");
-        [[TSLogger sharedLogger] log:@"keep-alive: mSrcSurface 未初始化，跳过"];
-        return;
-    }
-
-    /* 立即渲染一帧，让系统进入 captured 状态 */
-    CARenderServerRenderDisplay(0, CFSTR("LCD"), mSrcSurface, 0, 0);
-    TSLog(LOG_NOTICE, "[TrollShot] keep-alive: 首次渲染完成，captured 状态已激活");
-    [[TSLogger sharedLogger] log:@"keep-alive: 首次渲染完成，captured 状态已激活"];
-
-    /* 后台定时器：每 2 秒渲染一帧，维持 captured 状态 */
-    mKeepAliveTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
-                                              dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
-    uint64_t interval = 2 * NSEC_PER_SEC;
-    uint64_t leeway = 1 * NSEC_PER_SEC;
-    dispatch_source_set_timer(mKeepAliveTimer, dispatch_time(DISPATCH_TIME_NOW, interval), interval, leeway);
-    __weak typeof(self) weakSelf = self;
-    dispatch_source_set_event_handler(mKeepAliveTimer, ^{
-        __strong typeof(weakSelf) strongSelf = weakSelf;
-        if (!strongSelf) return;
-        /* 渲染一帧到 keep-alive surface，仅维持 captured 标志，不用于截图 */
-        @try {
-            CARenderServerRenderDisplay(0, CFSTR("LCD"), strongSelf->mSrcSurface, 0, 0);
-        } @catch (NSException *e) {
-            TSLog(LOG_ERR, "[TrollShot] keep-alive 渲染异常: %s", [e.reason UTF8String]);
-        }
-    });
-    dispatch_resume(mKeepAliveTimer);
-    TSLog(LOG_NOTICE, "[TrollShot] keep-alive 定时器已启动（每 2 秒）");
-    [[TSLogger sharedLogger] log:@"keep-alive 定时器已启动（每2秒维持captured状态）"];
 }
 
 /* ============================================================
@@ -431,10 +394,22 @@ static BOOL DetectJailbreak(void) {
     if (mUseFramebuffer) {
         /* ====================================================
          * 越狱模式：framebuffer 直读
-         * 1. 脏帧检测：IOSurfaceGetSeed 判断画面是否变化
-         * 2. 帧缓存：seed 未变且无旋转/裁剪需求时直接返回上次结果
-         * 3. 从 framebuffer surface 拷贝到目标 surface
+         * 需要 AirPlay 镜像维持 isCaptured 状态，否则游戏防截屏触发灰屏
          * ==================================================== */
+
+        /* 实时检查 AirPlay 镜像状态 */
+        if (![[UIScreen mainScreen] isCaptured]) {
+            TSLog(LOG_ERR, "[TrollShot] AirPlay 镜像未开启，framebuffer 截图将灰屏");
+            if (error)
+                *error = [NSError errorWithDomain:@"TrollShot" code:5 userInfo:@{
+                    NSLocalizedDescriptionKey : @"AirPlay 屏幕镜像未开启，无法截图（越狱 framebuffer 模式需要镜像维持防截屏）"
+                }];
+            return nil;
+        }
+
+        /* 脏帧检测：IOSurfaceGetSeed 判断画面是否变化
+         * 帧缓存：seed 未变且无旋转/裁剪需求时直接返回上次结果
+         * 从 framebuffer surface 拷贝到目标 surface */
         uint32_t currentSeed = IOSurfaceGetSeed(mFbSurface);
         BOOL frameChanged = (currentSeed != mLastSeed);
         mLastSeed = currentSeed;
@@ -644,13 +619,6 @@ static BOOL DetectJailbreak(void) {
 
 
 - (void)dealloc {
-    if (mKeepAliveTimer) {
-        dispatch_source_cancel(mKeepAliveTimer);
-        mKeepAliveTimer = nil;
-    }
-    if (mKeepAliveSurface) {
-        CFRelease(mKeepAliveSurface);
-    }
 }
 
 @end
