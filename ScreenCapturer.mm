@@ -403,17 +403,25 @@ static BOOL DetectJailbreak(void) {
     }
 
     /* 从源 surface 拷贝到目标 surface（两种模式共用）
-     * framebuffer 直读时锁定源 surface，防止 GPU 同时更新导致花屏 */
+     * framebuffer 直读时：
+     * 1. 锁定源 surface（只读），防止 GPU 同时更新导致花屏
+     * 2. TransferSurface 后锁定目标 surface（只读），强制等待 GPU 写完
+     * 3. 读取完后再解锁，避免读到半成品数据 */
     BOOL needsLock = (mUseFramebuffer && srcSurface == mFbSurface);
-    uint32_t lockSeed = 0;
+    uint32_t srcSeed = 0, dstSeed = 0;
     if (needsLock) {
-        IOSurfaceLock(srcSurface, 0, &lockSeed);
+        IOSurfaceLock(srcSurface, kIOSurfaceLockReadOnly, &srcSeed);
     }
     IOReturn accelRet = IOSurfaceAcceleratorTransferSurface(mAccelerator, srcSurface, mScreenSurface, NULL, NULL, NULL, NULL);
     if (needsLock) {
-        IOSurfaceUnlock(srcSurface, 0, &lockSeed);
+        IOSurfaceUnlock(srcSurface, kIOSurfaceLockReadOnly, &srcSeed);
+        /* 锁定目标 surface 强制等待 GPU 完成写入 */
+        IOSurfaceLock(mScreenSurface, kIOSurfaceLockReadOnly, &dstSeed);
     }
     if (accelRet != kIOReturnSuccess) {
+        if (needsLock) {
+            IOSurfaceUnlock(mScreenSurface, kIOSurfaceLockReadOnly, &dstSeed);
+        }
         if (error)
             *error = [NSError errorWithDomain:@"TrollShot" code:1 userInfo:@{NSLocalizedDescriptionKey : @"IOSurface 加速器转换失败"}];
         return nil;
@@ -425,6 +433,9 @@ static BOOL DetectJailbreak(void) {
     CVReturn cvret = CVPixelBufferCreateWithIOSurface(kCFAllocatorDefault, mScreenSurface,
                                                       (__bridge CFDictionaryRef)attrs, &pixelBuffer);
     if (cvret != kCVReturnSuccess || !pixelBuffer) {
+        if (needsLock) {
+            IOSurfaceUnlock(mScreenSurface, kIOSurfaceLockReadOnly, &dstSeed);
+        }
         if (error)
             *error = [NSError errorWithDomain:@"TrollShot" code:2 userInfo:@{NSLocalizedDescriptionKey : @"CVPixelBuffer 创建失败"}];
         return nil;
@@ -435,6 +446,11 @@ static BOOL DetectJailbreak(void) {
     CGImageRef cgImage = [mCIContext createCGImage:ciImage fromRect:[ciImage extent]];
 
     CVPixelBufferRelease(pixelBuffer);
+
+    /* framebuffer 直读：读取完毕，解锁目标 surface */
+    if (needsLock) {
+        IOSurfaceUnlock(mScreenSurface, kIOSurfaceLockReadOnly, &dstSeed);
+    }
 
     /*
      * 方向校正（CGContext 手动旋转）：

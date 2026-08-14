@@ -46,6 +46,10 @@ size_t IOSurfaceGetWidth(IOSurfaceRef buffer);
 OSType IOSurfaceGetPixelFormat(IOSurfaceRef buffer);
 void IOSurfaceIncrementUseCount(IOSurfaceRef buffer);
 Boolean IOSurfaceIsInUse(IOSurfaceRef buffer);
+/* IOSurface 锁定选项 */
+#define kIOSurfaceLockReadOnly    0x00000001
+#define kIOSurfaceLockAvoidSync   0x00000002
+
 IOReturn IOSurfaceLock(IOSurfaceRef buffer, uint32_t options, uint32_t *seed);
 IOSurfaceRef IOSurfaceLookupFromMachPort(mach_port_t);
 IOReturn IOSurfaceUnlock(IOSurfaceRef buffer, uint32_t options, uint32_t *seed);
