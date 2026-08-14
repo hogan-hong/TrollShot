@@ -326,34 +326,43 @@ static BOOL DetectJailbreak(void) {
             }
         }
 
-        /* 方案3：直接 IOKit 打开 framebuffer user client */
+        /* 方案3：直接 IOKit 打开 framebuffer user client
+         * iOS 14 上 GetLayerDefaultSurface/CopyLayerDisplayedSurface 均返回 kIOReturnNotPrivileged，
+         * 这是内核级 IOKit 权限检查，即使 root 也无法绕过。
+         * 尝试通过 IOKit 直接打开 user client 作为最后手段。 */
         if (!mFbSurface) {
             [[TSLogger sharedLogger] log:@"framebuffer: 尝试直接 IOKit 方式"];
-            io_service_t fbService = IOServiceGetMatchingService(kIOMasterPortDefault,
-                IOServiceMatching("IOMobileFramebufferShim"));
-            if (fbService) {
+            /* 尝试多个可能的服务名 */
+            const char *serviceNames[] = {"AppleCLCD", "IOMobileFramebufferLegacy", "IOMobileFramebuffer", NULL};
+            for (int si = 0; serviceNames[si] != NULL; si++) {
+                io_service_t fbService = IOServiceGetMatchingService(kIOMasterPortDefault,
+                    IOServiceMatching(serviceNames[si]));
+                if (!fbService) continue;
+                [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: 找到服务 %s, 尝试 IOServiceOpen", serviceNames[si]]];
                 io_connect_t fbConnect = 0;
                 IOReturn openRet = IOServiceOpen(fbService, mach_task_self(), 0, &fbConnect);
-                [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: IOServiceOpen ret=0x%x connect=0x%x", openRet, fbConnect]];
                 if (openRet == kIOReturnSuccess && fbConnect) {
-                    /* 通过 IOConnectCall 获取 layer 0 的 surface */
                     IOSurfaceRef ioSurface = NULL;
                     size_t outSize = sizeof(IOSurfaceRef);
-                    IOReturn callRet = IOConnectCallStructMethod(fbConnect,
-                        1, /* selector: get layer default surface */
-                        NULL, 0,
-                        &ioSurface, &outSize);
+                    /* selector 1 = get layer default surface（参考 IOMobileFramebuffer external methods） */
+                    IOReturn callRet = IOConnectCallStructMethod(fbConnect, 1, NULL, 0, &ioSurface, &outSize);
                     if (callRet == kIOReturnSuccess && ioSurface) {
                         mFbSurface = ioSurface;
                         [[TSLogger sharedLogger] log:@"framebuffer: 直接 IOKit 获取 surface 成功"];
+                        IOServiceClose(fbConnect);
+                        IOObjectRelease(fbService);
+                        break;
                     } else {
-                        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: IOConnectCall 失败 ret=0x%x", callRet]];
+                        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: IOConnectCall(%s) 失败 ret=0x%x", serviceNames[si], callRet]];
                     }
                     IOServiceClose(fbConnect);
+                } else {
+                    [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: IOServiceOpen(%s) 失败 ret=0x%x", serviceNames[si], openRet]];
                 }
                 IOObjectRelease(fbService);
-            } else {
-                [[TSLogger sharedLogger] log:@"framebuffer: IOServiceMatching IOMobileFramebufferShim 未找到"];
+            }
+            if (!mFbSurface) {
+                [[TSLogger sharedLogger] log:@"framebuffer: IOKit 方式也未找到可用服务，iOS 14 内核限制"];
             }
         }
 
