@@ -173,31 +173,29 @@ static BOOL DetectJailbreak(void) {
     [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"越狱检测: mode=%d, uid=%d", g_isJailbreakMode, getuid()]];
 
     if (g_isJailbreakMode) {
-        /* 越狱模式：尝试提升为 root（framebuffer 直读需要 root 权限）
-         * rootful 越狱（checkra1n/unc0ver）内核补丁允许 setuid(0) */
+        /* 越狱模式：使用 CARenderServer（与 TrollVNC 相同方式）
+         *
+         * 不使用 IOMobileFramebuffer 直读，原因：
+         * 1. framebuffer 直读绕过 SpringBoard 渲染管道，系统不知道有人在截屏，
+         *    游戏防截屏保护触发（如梦幻西游三维版画面变灰）
+         * 2. framebuffer 直读存在 GPU 竞态问题，导致紫色花屏
+         * 3. CARenderServer 走 SpringBoard 渲染管道，系统感知到截屏，
+         *    游戏正常渲染，与 TrollVNC 行为一致
+         *
+         * 仍保留 root 权限提升（daemon 以 root 运行时需要）
+         * 仍保持越狱模式标记（串行执行，避免 Substitute hook 并发 mach IPC 开销） */
         if (getuid() != 0) {
             TryEscalateToRoot();
             [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"权限提升: uid=%d", getuid()]];
         }
 
-        /* 尝试 framebuffer 直读 */
-        mUseFramebuffer = [self setupFramebufferDirectRead];
-        g_useFramebuffer = mUseFramebuffer;
-
-        if (mUseFramebuffer) {
-            TSLog(LOG_NOTICE, "[TrollShot] 越狱模式: framebuffer 直读初始化成功");
-            [[TSLogger sharedLogger] log:@"截图模式：越狱 IOMobileFramebuffer 直读"];
-        } else {
-            /* framebuffer 失败，降级为 CARenderServer，但保持越狱模式标记（串行执行）
-             * 越狱环境即使降级也必须串行，避免 Substitute hook 并发 mach IPC 开销 */
-            TSLog(LOG_NOTICE, "[TrollShot] framebuffer 直读失败，降级为 CARenderServer（串行）");
-            [[TSLogger sharedLogger] log:@"截图模式：越狱但framebuffer降级CARenderServer（串行）"];
-            /* 不重置 g_isJailbreakMode，保持串行执行 */
-        }
+        TSLog(LOG_NOTICE, "[TrollShot] 越狱模式: 使用 CARenderServer（与 TrollVNC 相同）");
+        [[TSLogger sharedLogger] log:@"截图模式：越狱 CARenderServer（与TrollVNC相同方式）"];
+        /* 不重置 g_isJailbreakMode，保持串行执行 */
     }
 
-    if (!mUseFramebuffer) {
-        /* 非越狱路径或越狱降级路径：创建 IOSurface + accelerator */
+    /* 所有模式统一使用 CARenderServer */
+    {
         [self setupCARenderServer];
         if (!g_isJailbreakMode) {
             [[TSLogger sharedLogger] log:@"截图模式：非越狱 CARenderServer"];
