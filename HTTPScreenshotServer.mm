@@ -21,6 +21,7 @@
 #import <sys/socket.h>
 #import <sys/wait.h>
 #import <unistd.h>
+#import <sys/stat.h>
 #import <spawn.h>
 #import <stdlib.h>
 
@@ -102,7 +103,10 @@ static void *ShutdownThreadEntry(void *arg) {
 
         /* 写入停止标志，wrapper 脚本检测到后不会重启 daemon */
         FILE *f = fopen("/tmp/trollshotd.stop", "w");
-        if (f) fclose(f);
+        if (f) {
+            fclose(f);
+            chmod("/tmp/trollshotd.stop", 0666);
+        }
 
         /* 等待 HTTP 响应发送完毕 */
         usleep(150000); /* 150ms */
@@ -141,7 +145,10 @@ static void HandleClientConnection(int client) {
             [[TSLogger sharedLogger] log:@"处理 /stop 请求，写入停止标志并退出"];
             /* 写入停止标志，wrapper 脚本检测到后不会重启 */
             FILE *f = fopen("/tmp/trollshotd.stop", "w");
-            if (f) fclose(f);
+            if (f) {
+                fclose(f);
+                chmod("/tmp/trollshotd.stop", 0666);
+            }
             /* 等待 HTTP 响应发送完毕 */
             usleep(150000);
             exit(0);

@@ -8,5 +8,5 @@ while true; do
     if [ ! -f /tmp/trollshotd.stop ]; then
         /usr/bin/trollshotd --port 6688
     fi
-    sleep 2
+    sleep 1
 done
