@@ -111,6 +111,12 @@ static BOOL DetectJailbreak(void) {
     return result;
 }
 
+@interface ScreenCapturer (Private)
+- (void)startCaptureKeepAlive;
+- (void)setupCARenderServer;
+- (BOOL)setupFramebufferDirectRead;
+@end
+
 @implementation ScreenCapturer {
     /* 共用：渲染属性和目标 surface */
     NSDictionary *mRenderProperties;
@@ -132,6 +138,13 @@ static BOOL DetectJailbreak(void) {
     NSData *mCachedJPEG;
     BOOL mHasCachedFrame;
     NSTimeInterval mLastCaptureTime;  /* 上次截图时间（CARenderServer 模式时间缓存） */
+
+    /* 越狱混合模式：CARenderServer keep-alive（维持 UIScreen.isCaptured 状态）
+     * 后台定时器定期调用 CARenderServerRenderDisplay，让系统感知到有人在截屏，
+     * 游戏防截屏保护不会触发（与 TrollVNC 持续渲染相同原理）
+     * 实际截图走 framebuffer 直读（快），keep-alive 只维持 captured 标志 */
+    IOSurfaceRef mKeepAliveSurface;     /* keep-alive 专用 surface（不用于截图） */
+    dispatch_source_t mKeepAliveTimer;  /* 后台定时器 */
 
     /* 线程安全锁 */
     NSLock *mLock;
@@ -173,36 +186,92 @@ static BOOL DetectJailbreak(void) {
     [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"越狱检测: mode=%d, uid=%d", g_isJailbreakMode, getuid()]];
 
     if (g_isJailbreakMode) {
-        /* 越狱模式：使用 CARenderServer（与 TrollVNC 相同方式）
+        /* 越狱混合模式：framebuffer 直读（快）+ CARenderServer keep-alive（维持 captured 标志）
          *
-         * 不使用 IOMobileFramebuffer 直读，原因：
-         * 1. framebuffer 直读绕过 SpringBoard 渲染管道，系统不知道有人在截屏，
-         *    游戏防截屏保护触发（如梦幻西游三维版画面变灰）
-         * 2. framebuffer 直读存在 GPU 竞态问题，导致紫色花屏
-         * 3. CARenderServer 走 SpringBoard 渲染管道，系统感知到截屏，
-         *    游戏正常渲染，与 TrollVNC 行为一致
+         * 原理：
+         * 1. framebuffer 直读绕过 SpringBoard，系统不知道有人在截屏，游戏防截屏触发（画面变灰）
+         * 2. CARenderServer 走 SpringBoard 渲染管道，系统感知到截屏，游戏正常渲染
+         * 3. 解决方案：后台定时器每 2 秒调一次 CARenderServerRenderDisplay 维持 captured 标志
+         *    实际截图走 framebuffer 直读（快速、低开销）
+         * 4. TrollVNC 也是持续调用 CARenderServerRenderDisplay 维持 captured 状态
+         *    我们用低频（0.5fps）keep-alive 即可，不需要 30fps 持续渲染
          *
-         * 仍保留 root 权限提升（daemon 以 root 运行时需要）
+         * 仍保留 root 权限提升（framebuffer 直读需要 root 权限）
          * 仍保持越狱模式标记（串行执行，避免 Substitute hook 并发 mach IPC 开销） */
         if (getuid() != 0) {
             TryEscalateToRoot();
             [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"权限提升: uid=%d", getuid()]];
         }
 
-        TSLog(LOG_NOTICE, "[TrollShot] 越狱模式: 使用 CARenderServer（与 TrollVNC 相同）");
-        [[TSLogger sharedLogger] log:@"截图模式：越狱 CARenderServer（与TrollVNC相同方式）"];
-        /* 不重置 g_isJailbreakMode，保持串行执行 */
-    }
+        /* 尝试 framebuffer 直读（用于实际截图，快速） */
+        mUseFramebuffer = [self setupFramebufferDirectRead];
+        g_useFramebuffer = mUseFramebuffer;
 
-    /* 所有模式统一使用 CARenderServer */
-    {
-        [self setupCARenderServer];
-        if (!g_isJailbreakMode) {
-            [[TSLogger sharedLogger] log:@"截图模式：非越狱 CARenderServer"];
+        if (mUseFramebuffer) {
+            /* framebuffer 直读成功，同时启动 CARenderServer keep-alive 维持 captured 标志 */
+            [self setupCARenderServer];
+            [self startCaptureKeepAlive];
+
+            TSLog(LOG_NOTICE, "[TrollShot] 越狱混合模式: framebuffer 直读 + CARenderServer keep-alive");
+            [[TSLogger sharedLogger] log:@"截图模式：越狱混合（framebuffer直读 + CARenderServer保活）"];
+        } else {
+            /* framebuffer 失败，降级为纯 CARenderServer（与非越狱相同） */
+            TSLog(LOG_NOTICE, "[TrollShot] framebuffer 直读失败，降级为纯 CARenderServer");
+            [[TSLogger sharedLogger] log:@"截图模式：越狱但framebuffer降级CARenderServer（串行）"];
+            [self setupCARenderServer];
         }
+        /* 不重置 g_isJailbreakMode，保持串行执行 */
+    } else {
+        /* 非越狱模式：纯 CARenderServer */
+        [self setupCARenderServer];
+        [[TSLogger sharedLogger] log:@"截图模式：非越狱 CARenderServer"];
     }
 
     return self;
+}
+
+/* ============================================================
+ * 启动 CARenderServer keep-alive 定时器
+ * 每 2 秒调用 CARenderServerRenderDisplay 一次，维持 UIScreen.isCaptured = YES
+ * 让游戏防截屏保护不触发（与 TrollVNC 持续渲染相同原理，但频率极低）
+ * ============================================================ */
+- (void)startCaptureKeepAlive {
+    if (mKeepAliveTimer) {
+        return; /* 已启动 */
+    }
+
+    /* 使用 mSrcSurface 作为 keep-alive surface（setupCARenderServer 已创建） */
+    if (!mSrcSurface) {
+        TSLog(LOG_ERR, "[TrollShot] keep-alive: mSrcSurface 未初始化，无法启动");
+        [[TSLogger sharedLogger] log:@"keep-alive: mSrcSurface 未初始化，跳过"];
+        return;
+    }
+
+    /* 立即渲染一帧，让系统进入 captured 状态 */
+    CARenderServerRenderDisplay(0, CFSTR("LCD"), mSrcSurface, 0, 0);
+    TSLog(LOG_NOTICE, "[TrollShot] keep-alive: 首次渲染完成，captured 状态已激活");
+    [[TSLogger sharedLogger] log:@"keep-alive: 首次渲染完成，captured 状态已激活"];
+
+    /* 后台定时器：每 2 秒渲染一帧，维持 captured 状态 */
+    mKeepAliveTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                                              dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+    uint64_t interval = 2 * NSEC_PER_SEC;
+    uint64_t leeway = 1 * NSEC_PER_SEC;
+    dispatch_source_set_timer(mKeepAliveTimer, dispatch_time(DISPATCH_TIME_NOW, interval), interval, leeway);
+    __weak typeof(self) weakSelf = self;
+    dispatch_source_set_event_handler(mKeepAliveTimer, ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        /* 渲染一帧到 keep-alive surface，仅维持 captured 标志，不用于截图 */
+        @try {
+            CARenderServerRenderDisplay(0, CFSTR("LCD"), strongSelf->mSrcSurface, 0, 0);
+        } @catch (NSException *e) {
+            TSLog(LOG_ERR, "[TrollShot] keep-alive 渲染异常: %s", [e.reason UTF8String]);
+        }
+    });
+    dispatch_resume(mKeepAliveTimer);
+    TSLog(LOG_NOTICE, "[TrollShot] keep-alive 定时器已启动（每 2 秒）");
+    [[TSLogger sharedLogger] log:@"keep-alive 定时器已启动（每2秒维持captured状态）"];
 }
 
 /* ============================================================
@@ -571,6 +640,17 @@ static BOOL DetectJailbreak(void) {
     }
 
     return jpegData;
+}
+
+
+- (void)dealloc {
+    if (mKeepAliveTimer) {
+        dispatch_source_cancel(mKeepAliveTimer);
+        mKeepAliveTimer = nil;
+    }
+    if (mKeepAliveSurface) {
+        IOSurfaceRelease(mKeepAliveSurface);
+    }
 }
 
 @end
