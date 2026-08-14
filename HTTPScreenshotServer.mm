@@ -102,7 +102,7 @@ static void *ShutdownThreadEntry(void *arg) {
         [[TSLogger sharedLogger] log:@"收到关闭请求，写入停止标志并退出..."];
 
         /* 写入停止标志，wrapper 脚本检测到后不会重启 daemon */
-        system("mkdir -p /var/mobile/trollshot 2>/dev/null");
+        mkdir("/var/mobile/trollshot", 0755);
             FILE *f = fopen("/var/mobile/trollshot/stop.flag", "w");
         if (f) {
             fclose(f);
@@ -145,7 +145,7 @@ static void HandleClientConnection(int client) {
             close(client);
             [[TSLogger sharedLogger] log:@"处理 /stop 请求，写入停止标志并退出"];
             /* 写入停止标志，wrapper 脚本检测到后不会重启 */
-            system("mkdir -p /var/mobile/trollshot 2>/dev/null");
+            mkdir("/var/mobile/trollshot", 0755);
             FILE *f = fopen("/var/mobile/trollshot/stop.flag", "w");
             if (f) {
                 fclose(f);
