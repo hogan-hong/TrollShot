@@ -32,12 +32,17 @@
 	<key>com.apple.backboard.client</key>
 	<true/>
 
-	<!-- IOKit 用户端访问（与 screendump 相同） -->
+	<!-- IOKit 用户端访问（IOSurface + GPU 加速器 + framebuffer） -->
 	<key>com.apple.security.iokit-user-client-class</key>
 	<array>
 		<string>IOSurfaceAcceleratorClient</string>
 		<string>IOSurfaceRootUserClient</string>
 		<string>IOMobileFramebufferUserClient</string>
+		<string>IOAccelContext</string>
+		<string>IOAccelDevice</string>
+		<string>IOAccelSharedUserClient</string>
+		<string>IOAccelSubmitter2</string>
+		<string>IOGPUDeviceUserClient</string>
 	</array>
 
 	<!-- framebuffer 直读额外权限 -->
