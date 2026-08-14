@@ -80,8 +80,11 @@ jobs:
           rm -rf .theos packages
           make clean package FLAVOR=ipa 2>&1 | tee -a build.log
 
-          echo "=== ipa 版 staging 检查（不应含 LaunchDaemons/DEBIAN/usr/bin） ==="
+          echo "=== ipa 版 staging 处理 ==="
           ls -la .theos/_/Applications/TrollShot.app/ || true
+          # 说明：Theos 的 tool.mk 会自动把 trollshotd 放进 .theos/_/usr/bin（deb 包依赖此行为装 daemon）。
+          # ipa 打包只取 Applications/TrollShot.app，usr/bin 不会进 Payload；此处防御性清理后校验无 deb 布局残留。
+          rm -rf .theos/_/usr .theos/_/Library/LaunchDaemons .theos/_/DEBIAN
           if [ -d ".theos/_/Library/LaunchDaemons" ] || [ -d ".theos/_/usr/bin" ]; then
             echo "❌ ipa 构建不应包含 deb 布局文件（LaunchDaemons/usr/bin）！"
             exit 1
@@ -107,9 +110,17 @@ jobs:
           zip -yqr TrollShot.ipa Payload
           rm -rf Payload
           ls -lh TrollShot.ipa
-          # 列出 IPA 内容确认结构
-          echo "=== IPA 内容 ==="
-          python3 -c "import zipfile; [print(n) for n in zipfile.ZipFile('TrollShot.ipa').namelist()]"
+          # 列出 IPA 内容并严格校验：只允许 Payload/TrollShot.app/ 路径
+          echo "=== IPA 内容校验 ==="
+          unzip -Z1 TrollShot.ipa
+          # 仅放行 Payload/ 目录条目本身与 Payload/TrollShot.app/ 之下的内容，其余一律判失败
+          BAD=$(unzip -Z1 TrollShot.ipa | grep -v -E '^Payload/(TrollShot\.app/.*)?$' || true)
+          if [ -n "$BAD" ]; then
+            echo "❌ ipa 含 Payload 外的路径:"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "✅ ipa 仅含 Payload/TrollShot.app"
 
       - name: 上传构建日志
         if: always()
