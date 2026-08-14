@@ -44,9 +44,9 @@
 - (void)ensureFileHandle {
     if (_fileHandle) return;
 
-    NSArray *docPaths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-    NSString *baseDir = docPaths.firstObject ?: NSTemporaryDirectory();
-    _logPath = [baseDir stringByAppendingPathComponent:@"TrollShot.log"];
+    /* daemon 是命令行工具，没有 app container，NSDocumentDirectory 不可靠。
+     * 统一写到 /var/mobile/trollshot/TrollShot.log */
+    _logPath = @"/var/mobile/trollshot/TrollShot.log";
 
     if (![[NSFileManager defaultManager] fileExistsAtPath:_logPath]) {
         [[NSFileManager defaultManager] createFileAtPath:_logPath contents:nil attributes:nil];

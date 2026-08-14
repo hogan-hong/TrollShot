@@ -4,9 +4,10 @@
 # 通过 /bin/sh 包装脚本 fork 出来则不会，这是 iOS 越狱环境的已知行为。
 # 保持脚本存活，daemon 崩溃时自动重启。
 # 检查 /var/mobile/trollshot/stop.flag 标志，存在则不启动 daemon（用户通过 app 停止）
+LOG_FILE="/var/mobile/trollshot/trollshotd.log"
 while true; do
     if [ ! -f /var/mobile/trollshot/stop.flag ]; then
-        /usr/bin/trollshotd --port 6688
+        /usr/bin/trollshotd --port 6688 >> "$LOG_FILE" 2>&1
     fi
     sleep 1
 done
