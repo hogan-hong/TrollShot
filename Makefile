@@ -9,7 +9,7 @@ TOOL_NAME = trollshotd
 TrollShot_FILES = main.m AppDelegate.m TSLogger.m TrollShotManager.m ScreenCapturer.mm HTTPScreenshotServer.mm
 TrollShot_CFLAGS = -fobjc-arc -Iinclude-spi
 TrollShot_FRAMEWORKS = UIKit CoreMedia CoreVideo CoreImage ImageIO IOSurface QuartzCore IOKit
-TrollShot_PRIVATE_FRAMEWORKS = FrontBoardServices
+TrollShot_PRIVATE_FRAMEWORKS = FrontBoardServices IOMobileFramebuffer
 TrollShot_RESOURCE_DIRS = Resources
 TrollShot_CODESIGN_FLAGS = -STrollShot.entitlements
 
