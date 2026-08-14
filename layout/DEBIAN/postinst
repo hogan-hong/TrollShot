@@ -3,6 +3,9 @@
 
 echo "TrollShot: 正在配置..."
 
+# 清除停止标志（安装/升级时确保 daemon 能正常启动）
+rm -f /tmp/trollshotd.stop
+
 # 修复权限（deb 安装可能保留错误的 owner）
 chown root:wheel /usr/bin/trollshotd 2>/dev/null
 chmod 755 /usr/bin/trollshotd 2>/dev/null
