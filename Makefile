@@ -1,4 +1,4 @@
-export ARCHS = arm64 arm64e
+export ARCHS = arm64
 export TARGET = iphone:clang:14.5:14.0
 
 include $(THEOS)/makefiles/common.mk
@@ -15,8 +15,8 @@ TrollShot_CODESIGN_FLAGS = -STrollShot.entitlements
 
 trollshotd_FILES = trollshotd.mm TSLogger.m ScreenCapturer.mm HTTPScreenshotServer.mm
 trollshotd_CFLAGS = -fobjc-arc -Iinclude-spi
-trollshotd_FRAMEWORKS = UIKit CoreMedia CoreVideo CoreImage ImageIO IOSurface QuartzCore Foundation IOKit
-trollshotd_PRIVATE_FRAMEWORKS = FrontBoardServices
+trollshotd_FRAMEWORKS = CoreMedia CoreVideo CoreImage ImageIO IOSurface QuartzCore Foundation IOKit
+trollshotd_PRIVATE_FRAMEWORKS = FrontBoardServices IOMobileFramebuffer
 trollshotd_LIBRARIES = pthread
 trollshotd_CODESIGN_FLAGS = -STrollShot.entitlements
 

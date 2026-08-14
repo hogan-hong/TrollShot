@@ -25,24 +25,7 @@
 #import <UIKit/UIKit.h>
 #import <syslog.h>
 #import <dlfcn.h>
-/* IOKit 函数手动声明（iOS SDK 不提供完整 IOKitLib.h） */
 #import <IOKit/IOReturn.h>
-#import <mach/mach_port.h>
-#import <mach/mach_init.h>
-typedef mach_port_t io_object_t;
-typedef io_object_t io_service_t;
-typedef io_object_t io_connect_t;
-extern "C" {
-    io_service_t IOServiceGetMatchingService(mach_port_t masterPort, CFDictionaryRef matching);
-    CFMutableDictionaryRef IOServiceMatching(const char *name);
-    IOReturn IOServiceOpen(io_service_t service, task_port_t owningTask, uint32_t type, io_connect_t *connect);
-    IOReturn IOServiceClose(io_connect_t connect);
-    kern_return_t IOObjectRelease(io_object_t object);
-    IOReturn IOConnectCallStructMethod(io_connect_t connect, uint32_t selector,
-        const void *inputStruct, size_t inputStructCnt,
-        void *outputStruct, size_t *outputStructCnt);
-}
-#define kIOMasterPortDefault 0
 #import <unistd.h>
 #import <string.h>
 #import "TSLogger.h"
@@ -265,35 +248,16 @@ static BOOL DetectJailbreak(void) {
 }
 
 /* ============================================================
- * 越狱模式初始化：通过 dlsym 加载 IOMobileFramebuffer 私有 API
- * 参考 screendump (fix14) 的 IOMobileFramebufferGetLayerDefaultSurface 方案
+ * 越狱模式初始化：直接链接 IOMobileFramebuffer 私有 API
+ * 参考 screendump (fix14) 的实现方式，直接链接 framework
  * 直接读取系统 framebuffer，完全绕过 mach IPC 链路
  * ============================================================ */
 - (BOOL)setupFramebufferDirectRead {
-    /* dlopen IOMobileFramebuffer 私有框架（不是 IOKit.framework） */
-    void *fbFramework = dlopen("/System/Library/PrivateFrameworks/IOMobileFramebuffer.framework/IOMobileFramebuffer", RTLD_LAZY);
-    if (!fbFramework) {
-        TSLog(LOG_ERR, "[TrollShot] dlopen IOMobileFramebuffer 失败: %s", dlerror());
-        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: dlopen IOMobileFramebuffer.framework 失败: %s", dlerror()]];
-        return NO;
-    }
-    [[TSLogger sharedLogger] log:@"framebuffer: dlopen IOMobileFramebuffer.framework 成功"];
-
-    /* dlsym 加载 IOMobileFramebuffer 函数 */
-    IOMobileFramebufferGetMainDisplayFunc getMainDisplay =
-        (IOMobileFramebufferGetMainDisplayFunc)dlsym(fbFramework, "IOMobileFramebufferGetMainDisplay");
-    IOMobileFramebufferGetLayerDefaultSurfaceFunc getLayerSurface =
-        (IOMobileFramebufferGetLayerDefaultSurfaceFunc)dlsym(fbFramework, "IOMobileFramebufferGetLayerDefaultSurface");
-
-    if (!getMainDisplay || !getLayerSurface) {
-        TSLog(LOG_ERR, "[TrollShot] dlsym IOMobileFramebuffer 函数未找到 (getMainDisplay=%p, getLayerSurface=%p)", getMainDisplay, getLayerSurface);
-        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: dlsym 失败 (getMainDisplay=%p, getLayerSurface=%p)", getMainDisplay, getLayerSurface]];
-        return NO;
-    }
-    [[TSLogger sharedLogger] log:@"framebuffer: dlsym IOMobileFramebuffer 函数加载成功"];
+    /* 直接调用 IOMobileFramebuffer 函数（编译时链接 framework，与 screendump 相同方式） */
+    [[TSLogger sharedLogger] log:@"framebuffer: 直接链接 IOMobileFramebuffer.framework"];
 
     /* 获取主显示屏 framebuffer 连接 */
-    IOReturn ret = getMainDisplay(&mFramebuffer);
+    IOReturn ret = IOMobileFramebufferGetMainDisplay(&mFramebuffer);
     if (ret != kIOReturnSuccess || !mFramebuffer) {
         TSLog(LOG_ERR, "[TrollShot] IOMobileFramebufferGetMainDisplay 失败: 0x%x", ret);
         [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: GetMainDisplay 失败 ret=0x%x (uid=%d)", ret, getuid()]];
@@ -302,71 +266,19 @@ static BOOL DetectJailbreak(void) {
     [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: GetMainDisplay 成功 mFramebuffer=%p", mFramebuffer]];
 
     /* 获取默认层（layer 0）的 IOSurface -- 这是系统实时更新的帧缓冲
-     * iOS 14 上 GetLayerDefaultSurface 可能返回 kIOReturnNotPrivileged，
-     * 依次尝试三个方案：
-     * 1. GetLayerDefaultSurface（获取持续更新的 surface，高效）
-     * 2. CopyLayerDisplayedSurface（拷贝当前显示帧，备选）
-     * 3. 直接 IOKit：IOServiceMatching+IOServiceOpen 打开 framebuffer user client */
-    ret = getLayerSurface(mFramebuffer, 0, &mFbSurface);
+     * 与 screendump (fix14) 完全相同的调用方式 */
+    ret = IOMobileFramebufferGetLayerDefaultSurface(mFramebuffer, 0, &mFbSurface);
     if (ret != kIOReturnSuccess || !mFbSurface) {
-        TSLog(LOG_ERR, "[TrollShot] GetLayerDefaultSurface 失败: 0x%x，尝试备选方案", ret);
-        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: GetLayerDefaultSurface 失败 ret=0x%x，尝试备选方案", ret]];
+        TSLog(LOG_ERR, "[TrollShot] GetLayerDefaultSurface 失败: 0x%x，尝试 CopyLayerDisplayedSurface", ret);
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: GetLayerDefaultSurface 失败 ret=0x%x，尝试 CopyLayerDisplayedSurface", ret]];
 
-        /* 方案2：CopyLayerDisplayedSurface */
-        IOMobileFramebufferCopyLayerDisplayedSurfaceFunc copyLayerSurface =
-            (IOMobileFramebufferCopyLayerDisplayedSurfaceFunc)dlsym(fbFramework, "IOMobileFramebufferCopyLayerDisplayedSurface");
-        if (copyLayerSurface) {
-            ret = copyLayerSurface(mFramebuffer, 0, &mFbSurface);
-            if (ret == kIOReturnSuccess && mFbSurface) {
-                [[TSLogger sharedLogger] log:@"framebuffer: CopyLayerDisplayedSurface 成功"];
-            } else {
-                TSLog(LOG_ERR, "[TrollShot] CopyLayerDisplayedSurface 也失败: 0x%x", ret);
-                [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: CopyLayerDisplayedSurface 失败 ret=0x%x", ret]];
-                mFbSurface = NULL;
-            }
-        }
-
-        /* 方案3：直接 IOKit 打开 framebuffer user client
-         * iOS 14 上 GetLayerDefaultSurface/CopyLayerDisplayedSurface 均返回 kIOReturnNotPrivileged，
-         * 这是内核级 IOKit 权限检查，即使 root 也无法绕过。
-         * 尝试通过 IOKit 直接打开 user client 作为最后手段。 */
-        if (!mFbSurface) {
-            [[TSLogger sharedLogger] log:@"framebuffer: 尝试直接 IOKit 方式"];
-            /* 尝试多个可能的服务名 */
-            const char *serviceNames[] = {"AppleCLCD", "IOMobileFramebufferLegacy", "IOMobileFramebuffer", NULL};
-            for (int si = 0; serviceNames[si] != NULL; si++) {
-                io_service_t fbService = IOServiceGetMatchingService(kIOMasterPortDefault,
-                    IOServiceMatching(serviceNames[si]));
-                if (!fbService) continue;
-                [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: 找到服务 %s, 尝试 IOServiceOpen", serviceNames[si]]];
-                io_connect_t fbConnect = 0;
-                IOReturn openRet = IOServiceOpen(fbService, mach_task_self(), 0, &fbConnect);
-                if (openRet == kIOReturnSuccess && fbConnect) {
-                    IOSurfaceRef ioSurface = NULL;
-                    size_t outSize = sizeof(IOSurfaceRef);
-                    /* selector 1 = get layer default surface（参考 IOMobileFramebuffer external methods） */
-                    IOReturn callRet = IOConnectCallStructMethod(fbConnect, 1, NULL, 0, &ioSurface, &outSize);
-                    if (callRet == kIOReturnSuccess && ioSurface) {
-                        mFbSurface = ioSurface;
-                        [[TSLogger sharedLogger] log:@"framebuffer: 直接 IOKit 获取 surface 成功"];
-                        IOServiceClose(fbConnect);
-                        IOObjectRelease(fbService);
-                        break;
-                    } else {
-                        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: IOConnectCall(%s) 失败 ret=0x%x", serviceNames[si], callRet]];
-                    }
-                    IOServiceClose(fbConnect);
-                } else {
-                    [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: IOServiceOpen(%s) 失败 ret=0x%x", serviceNames[si], openRet]];
-                }
-                IOObjectRelease(fbService);
-            }
-            if (!mFbSurface) {
-                [[TSLogger sharedLogger] log:@"framebuffer: IOKit 方式也未找到可用服务，iOS 14 内核限制"];
-            }
-        }
-
-        if (!mFbSurface) {
+        /* 备选：CopyLayerDisplayedSurface */
+        ret = IOMobileFramebufferCopyLayerDisplayedSurface(mFramebuffer, 0, &mFbSurface);
+        if (ret == kIOReturnSuccess && mFbSurface) {
+            [[TSLogger sharedLogger] log:@"framebuffer: CopyLayerDisplayedSurface 成功"];
+        } else {
+            TSLog(LOG_ERR, "[TrollShot] CopyLayerDisplayedSurface 也失败: 0x%x", ret);
+            [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: CopyLayerDisplayedSurface 失败 ret=0x%x", ret]];
             [[TSLogger sharedLogger] log:@"framebuffer: 所有方案均失败，降级为 CARenderServer"];
             return NO;
         }
@@ -374,7 +286,7 @@ static BOOL DetectJailbreak(void) {
         [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: GetLayerDefaultSurface 成功 mFbSurface=%p", mFbSurface]];
     }
 
-    /* 创建目标 surface 和 accelerator，用于从 framebuffer 拷贝帧数据 */
+/* 创建目标 surface 和 accelerator，用于从 framebuffer 拷贝帧数据 */
     CGSize screenSize = [[UIScreen mainScreen] _unjailedReferenceBoundsInPixels].size;
     int width = (int)round(screenSize.width);
     int height = (int)round(screenSize.height);
