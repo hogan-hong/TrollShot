@@ -395,7 +395,7 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
      * 如果之前通过 app 停止了服务，删除停止标志文件，wrapper 脚本会自动重启 daemon */
     if ([[NSFileManager defaultManager] fileExistsAtPath:kSystemPlistPath]) {
         /* 删除停止标志文件，让 wrapper 脚本重新启动 daemon */
-        [[NSFileManager defaultManager] removeItemAtPath:@"/tmp/trollshotd.stop" error:nil];
+        [[NSFileManager defaultManager] removeItemAtPath:@"/var/mobile/trollshot/stop.flag" error:nil];
         /* 等待 wrapper 脚本检测到标志已删除并重启 daemon（最多 5 秒） */
         for (int i = 0; i < 50; i++) {
             if ([self isDaemonRunning]) return YES;
@@ -515,7 +515,7 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
                 [NSThread sleepForTimeInterval:0.1];
             }
         }
-        /* HTTP /stop 请求发送成功后，daemon 会写入 /tmp/trollshotd.stop 并退出，
+        /* HTTP /stop 请求发送成功后，daemon 会写入 /var/mobile/trollshot/stop.flag 并退出，
          * wrapper 脚本检测到标志后不会重启。等待 daemon 退出即可。 */
         if (error) {
             *error = [NSError errorWithDomain:@"TrollShot"

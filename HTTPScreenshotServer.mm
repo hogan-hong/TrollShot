@@ -102,10 +102,11 @@ static void *ShutdownThreadEntry(void *arg) {
         [[TSLogger sharedLogger] log:@"收到关闭请求，写入停止标志并退出..."];
 
         /* 写入停止标志，wrapper 脚本检测到后不会重启 daemon */
-        FILE *f = fopen("/tmp/trollshotd.stop", "w");
+        system("mkdir -p /var/mobile/trollshot 2>/dev/null");
+            FILE *f = fopen("/var/mobile/trollshot/stop.flag", "w");
         if (f) {
             fclose(f);
-            chmod("/tmp/trollshotd.stop", 0666);
+            chmod("/var/mobile/trollshot/stop.flag", 0666);
         }
 
         /* 等待 HTTP 响应发送完毕 */
@@ -144,10 +145,11 @@ static void HandleClientConnection(int client) {
             close(client);
             [[TSLogger sharedLogger] log:@"处理 /stop 请求，写入停止标志并退出"];
             /* 写入停止标志，wrapper 脚本检测到后不会重启 */
-            FILE *f = fopen("/tmp/trollshotd.stop", "w");
+            system("mkdir -p /var/mobile/trollshot 2>/dev/null");
+            FILE *f = fopen("/var/mobile/trollshot/stop.flag", "w");
             if (f) {
                 fclose(f);
-                chmod("/tmp/trollshotd.stop", 0666);
+                chmod("/var/mobile/trollshot/stop.flag", 0666);
             }
             /* 等待 HTTP 响应发送完毕 */
             usleep(150000);
