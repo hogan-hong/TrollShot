@@ -335,8 +335,6 @@ static BOOL DetectJailbreak(void) {
                 [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"framebuffer: IOServiceOpen ret=0x%x connect=0x%x", openRet, fbConnect]];
                 if (openRet == kIOReturnSuccess && fbConnect) {
                     /* 通过 IOConnectCall 获取 layer 0 的 surface */
-                    uint64_t scalar[1] = { 0 }; /* layer 0 */
-                    size_t scalarCnt = 1;
                     IOSurfaceRef ioSurface = NULL;
                     size_t outSize = sizeof(IOSurfaceRef);
                     IOReturn callRet = IOConnectCallStructMethod(fbConnect,
