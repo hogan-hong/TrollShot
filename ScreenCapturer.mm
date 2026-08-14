@@ -32,14 +32,16 @@
 typedef mach_port_t io_object_t;
 typedef io_object_t io_service_t;
 typedef io_object_t io_connect_t;
-extern io_service_t IOServiceGetMatchingService(mach_port_t masterPort, CFDictionaryRef matching);
-extern CFMutableDictionaryRef IOServiceMatching(const char *name);
-extern IOReturn IOServiceOpen(io_service_t service, task_port_t owningTask, uint32_t type, io_connect_t *connect);
-extern IOReturn IOServiceClose(io_connect_t connect);
-extern kern_return_t IOObjectRelease(io_object_t object);
-extern IOReturn IOConnectCallStructMethod(io_connect_t connect, uint32_t selector,
-    const void *inputStruct, size_t inputStructCnt,
-    void *outputStruct, size_t *outputStructCnt);
+extern "C" {
+    io_service_t IOServiceGetMatchingService(mach_port_t masterPort, CFDictionaryRef matching);
+    CFMutableDictionaryRef IOServiceMatching(const char *name);
+    IOReturn IOServiceOpen(io_service_t service, task_port_t owningTask, uint32_t type, io_connect_t *connect);
+    IOReturn IOServiceClose(io_connect_t connect);
+    kern_return_t IOObjectRelease(io_object_t object);
+    IOReturn IOConnectCallStructMethod(io_connect_t connect, uint32_t selector,
+        const void *inputStruct, size_t inputStructCnt,
+        void *outputStruct, size_t *outputStructCnt);
+}
 #define kIOMasterPortDefault 0
 #import <unistd.h>
 #import <string.h>
