@@ -38,14 +38,14 @@ jobs:
           cp -R /tmp/theos-sdks/iPhoneOS14.5.sdk $THEOS/sdks/
           ls -la $THEOS/sdks/
 
-      - name: 构建应用
+      - name: 构建 deb（越狱版：framebuffer 直读，单线程）
         run: |
           set -o pipefail
           export THEOS=$GITHUB_WORKSPACE/theos
           rm -rf .theos
-          make clean package 2>&1 | tee build.log
+          make clean package FLAVOR=deb 2>&1 | tee build.log
 
-          echo "=== 检查 staging .app 中的 daemon 和 plist ==="
+          echo "=== 检查 staging .app 中的 daemon ==="
           ls -la .theos/_/Applications/TrollShot.app/ || true
 
           echo "=== 验证 plist 路径 ==="
@@ -67,8 +67,24 @@ jobs:
           echo "=== 验证 DEBIAN 脚本 ==="
           dpkg-deb --info packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm.deb || true
 
-      - name: 打包 IPA
+          echo "=== 转存 deb 产物（后续 ipa 构建会清理 packages 目录） ==="
+          mkdir -p artifacts
+          cp -p packages/*.deb artifacts/
+
+      - name: 构建 ipa（非越狱版：CARenderServer，4 线程）
         run: |
+          set -o pipefail
+          export THEOS=$GITHUB_WORKSPACE/theos
+          rm -rf .theos packages
+          make clean package FLAVOR=ipa 2>&1 | tee -a build.log
+
+          echo "=== ipa 版 staging 检查（不应含 LaunchDaemons/DEBIAN/usr/bin） ==="
+          ls -la .theos/_/Applications/TrollShot.app/ || true
+          if [ -d ".theos/_/Library/LaunchDaemons" ] || [ -d ".theos/_/usr/bin" ]; then
+            echo "❌ ipa 构建不应包含 deb 布局文件（LaunchDaemons/usr/bin）！"
+            exit 1
+          fi
+
           set -e
           # 验证 staging .app 中包含 Info.plist
           if [ ! -f ".theos/_/Applications/TrollShot.app/Info.plist" ]; then
@@ -114,7 +130,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: TrollShot-deb
-          path: packages/*.deb
+          path: artifacts/*.deb
           if-no-files-found: error
 
       - name: 上传解包调试信息

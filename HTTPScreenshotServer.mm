@@ -309,11 +309,17 @@ extern "C" void StartScreenshotServer(uint16_t port) {
     NSLog(@"[TrollShot] StartScreenshotServer 开始, port=%d", port);
     [[TSLogger sharedLogger] log:@"HTTP 服务线程启动"];
 
-    /* 触发 ScreenCapturer 初始化，检测越狱模式并设置并发数 */
+    /* 触发 ScreenCapturer 初始化，并发数按构建类型在编译期固定 */
     [ScreenCapturer sharedCapturer];
+#if defined(TROLLSHOT_FB_ONLY)
+    gMaxConcurrent = 1;  /* deb 专用构建：framebuffer 直读必须串行 */
+#elif defined(TROLLSHOT_CA_ONLY)
+    gMaxConcurrent = 4;  /* ipa 专用构建：CARenderServer 支持 4 并发 */
+#else
     if (g_isJailbreakMode) {
         gMaxConcurrent = 1; /* 越狱模式串行，避免 framebuffer 并发冲突 */
     }
+#endif
     NSString *modeStr;
     if (g_isJailbreakMode) {
         modeStr = g_useFramebuffer ? @"越狱 framebuffer 直读（需AirPlay镜像）" : @"越狱 CARenderServer（framebuffer降级）";

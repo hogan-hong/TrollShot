@@ -48,6 +48,7 @@ BOOL g_useFramebuffer = NO;
 BOOL g_needsMirror = NO;  /* 越狱模式：是否需要 AirPlay 镜像维持 isCaptured */
 
 
+#if !defined(TROLLSHOT_CA_ONLY)
 /* 越狱环境下尝试提升为 root 权限
  * rootful 越狱（checkra1n/unc0ver）内核补丁允许 setuid(0)
  * IOMobileFramebuffer 直读需要 root 权限 */
@@ -61,6 +62,7 @@ static void TryEscalateToRoot(void) {
         [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"setuid(0) 失败: errno=%d (%s)，uid=%d", errno, strerror(errno), getuid()]];
     }
 }
+#endif /* !TROLLSHOT_CA_ONLY */
 
 #ifdef __cplusplus
 extern "C" {
@@ -78,6 +80,8 @@ void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef su
  * 越狱检测：daemon 以 root 运行 = 越狱模式
  * 非越狱（TrollStore）以 mobile 用户运行
  * ============================================================ */
+#if !defined(TROLLSHOT_FB_ONLY) && !defined(TROLLSHOT_CA_ONLY)
+/* 专用构建（FLAVOR=deb/ipa）不需要运行时越狱检测，模式在编译期已固定 */
 static BOOL DetectJailbreak(void) {
     static BOOL result = NO;
     static dispatch_once_t onceToken;
@@ -112,6 +116,7 @@ static BOOL DetectJailbreak(void) {
     });
     return result;
 }
+#endif /* !TROLLSHOT_FB_ONLY && !TROLLSHOT_CA_ONLY */
 
 @interface ScreenCapturer (Private)
 - (void)setupCARenderServer;
@@ -183,6 +188,39 @@ static BOOL DetectJailbreak(void) {
         mOrientationObserver = nil;
     }
 
+#if defined(TROLLSHOT_FB_ONLY)
+    /* deb 专用构建（FLAVOR=deb）：越狱设备 root daemon，强制 framebuffer 直读。
+     * 不做越狱检测、不含 CARenderServer 降级路径，截图并发固定 1。
+     * 原理：
+     * 1. IOMobileFramebuffer 直读系统帧缓冲，2-3ms/张，完全绕过 mach IPC
+     * 2. framebuffer 直读绕过 SpringBoard，游戏防截屏会触发（画面变灰）
+     * 3. 解决方案：设备开启 AirPlay 屏幕镜像，UIScreen.isCaptured = YES
+     *    AirPlay 镜像让系统感知到屏幕正在被录制，游戏正常渲染彩色画面
+     * 4. UxPlay 服务器用 -vs 0 丢弃视频流，不占服务器资源
+     *    设备端只编码 16x16@1fps，开销极低 */
+    g_isJailbreakMode = YES;
+    if (getuid() != 0) {
+        TryEscalateToRoot();
+        [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"权限提升: uid=%d", getuid()]];
+    }
+    mUseFramebuffer = [self setupFramebufferDirectRead];
+    g_useFramebuffer = mUseFramebuffer;
+    g_needsMirror = mUseFramebuffer;  /* framebuffer 模式需要 AirPlay 镜像 */
+
+    if (mUseFramebuffer) {
+        TSLog(LOG_NOTICE, "[TrollShot] deb 专用构建: framebuffer 直读（需 AirPlay 镜像）");
+        [[TSLogger sharedLogger] log:@"截图模式：framebuffer 直读（deb 专用构建，单线程）"];
+    } else {
+        TSLog(LOG_ERR, "[TrollShot] framebuffer 初始化失败，deb 专用构建无降级路径");
+        [[TSLogger sharedLogger] log:@"截图模式：framebuffer 初始化失败（deb 专用构建不含 CARenderServer 降级），截图不可用"];
+    }
+#elif defined(TROLLSHOT_CA_ONLY)
+    /* ipa 专用构建（FLAVOR=ipa）：非越狱 TrollStore 设备，纯 CARenderServer，
+     * 与 TrollVNC 相同的截屏路线，截图并发固定 4。 */
+    g_isJailbreakMode = NO;
+    [self setupCARenderServer];
+    [[TSLogger sharedLogger] log:@"截图模式：CARenderServer（ipa 专用构建，4 线程）"];
+#else
     g_isJailbreakMode = DetectJailbreak();
     TSLog(LOG_NOTICE, "[TrollShot] 越狱检测: g_isJailbreakMode=%d, uid=%d", g_isJailbreakMode, getuid());
     [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"越狱检测: mode=%d, uid=%d", g_isJailbreakMode, getuid()]];
@@ -233,6 +271,7 @@ static BOOL DetectJailbreak(void) {
         [self setupCARenderServer];
         [[TSLogger sharedLogger] log:@"截图模式：非越狱 CARenderServer"];
     }
+#endif
 
     return self;
 }
@@ -242,6 +281,8 @@ static BOOL DetectJailbreak(void) {
  * （原逻辑完全保留，不修改）
  * ============================================================ */
 - (void)setupCARenderServer {
+#if !defined(TROLLSHOT_FB_ONLY)
+    /* deb 专用构建不编译 CARenderServer 路径 */
     CGSize screenSize = [[UIScreen mainScreen] _unjailedReferenceBoundsInPixels].size;
     int width = (int)round(screenSize.width);
     int height = (int)round(screenSize.height);
@@ -275,6 +316,7 @@ static BOOL DetectJailbreak(void) {
             CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, kCFRunLoopCommonModes);
         }
     }
+#endif /* !TROLLSHOT_FB_ONLY */
 }
 
 /* ============================================================
@@ -283,6 +325,10 @@ static BOOL DetectJailbreak(void) {
  * 直接读取系统 framebuffer，完全绕过 mach IPC 链路
  * ============================================================ */
 - (BOOL)setupFramebufferDirectRead {
+#if defined(TROLLSHOT_CA_ONLY)
+    /* ipa 专用构建不编译 framebuffer 直读路径 */
+    return NO;
+#else
     /* 直接调用 IOMobileFramebuffer 函数（编译时链接 framework，与 screendump 相同方式） */
     [[TSLogger sharedLogger] log:@"framebuffer: 直接链接 IOMobileFramebuffer.framework"];
 
@@ -361,6 +407,7 @@ static BOOL DetectJailbreak(void) {
           mFbSurface, mLastSeed, width, height);
 
     return YES;
+#endif /* !TROLLSHOT_CA_ONLY */
 }
 
 /* ============================================================
@@ -391,6 +438,7 @@ static BOOL DetectJailbreak(void) {
 
     IOSurfaceRef srcSurface = NULL;
 
+#if !defined(TROLLSHOT_CA_ONLY)
     if (mUseFramebuffer) {
         /* ====================================================
          * 越狱模式：framebuffer 直读
@@ -422,7 +470,10 @@ static BOOL DetectJailbreak(void) {
 
         srcSurface = mFbSurface;
         TSLog(LOG_NOTICE, "[TrollShot] 越狱模式: framebuffer 直读, seed=%u, changed=%d", currentSeed, frameChanged);
-    } else {
+    } else
+#endif
+#if !defined(TROLLSHOT_FB_ONLY)
+    {
         /* ====================================================
          * CARenderServer 模式（非越狱 或 越狱降级）
          * 时间缓存：300ms 内重复请求直接返回上次结果，减少 mach IPC 开销
@@ -443,6 +494,15 @@ static BOOL DetectJailbreak(void) {
         srcSurface = mSrcSurface;
         mLastCaptureTime = now;
     }
+#else
+    {
+        /* deb 专用构建：framebuffer 未初始化成功，无 CARenderServer 降级路径 */
+        if (error)
+            *error = [NSError errorWithDomain:@"TrollShot" code:6 userInfo:@{NSLocalizedDescriptionKey : @"framebuffer 未初始化，截图不可用（deb 专用构建）"}];
+        return nil;
+    }
+#endif
+    ;
 
     /* 从源 surface 拷贝到目标 surface（两种模式共用）
      * framebuffer 直读时：

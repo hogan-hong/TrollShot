@@ -12,7 +12,7 @@ TrollShot 源于 [TrollVNC](https://github.com/OwnGoalStudio/TrollVNC)，因此�
 
 ## 工作原理
 
-TrollShot 根据运行环境自动选择截图方式：
+TrollShot 按**安装包类型**固定截图路线（设备运行环境固定，越狱设备装 deb、非越狱设备装 ipa，见下方「安装方式」）：
 
 ### 越狱模式（daemon 以 root 运行）
 
@@ -78,9 +78,14 @@ App 会自动检测运行环境：
 
 ## 安装方式
 
-**通过 TrollStore 直接安装 IPA**。
+按设备越狱状态选择安装包，两种包的截图路线在编译期固定、互不包含对方代码：
 
-构建产物为 `TrollShot.ipa`，下载后用 TrollStore 安装即可。
+| 安装包 | 适用设备 | 截图方式 | 并发 | 获取途径 |
+|--------|----------|----------|------|----------|
+| `TrollShot-deb`（`com.hoganhong.trollshot`） | 越狱设备 | framebuffer 直读 GPU（需 AirPlay 镜像） | 1（串行） | GitHub Actions 产物 `TrollShot-deb`，Cydia/Sileo/SSH 安装，开机自启 |
+| `TrollShot.ipa` | 非越狱设备（TrollStore） | CARenderServer（与 TrollVNC 相同） | 4 | GitHub Actions 产物 `TrollShot-ipa`，TrollStore 安装 |
+
+越狱设备只装 deb、不装 ipa；非越狱设备只装 ipa、不装 deb。设备状态固定，无需运行时判断。
 
 ## 构建要求
 
@@ -91,18 +96,23 @@ App 会自动检测运行环境：
 
 ## 本地构建
 
+按构建类型（FLAVOR）出对应的包：
+
 ```sh
 cd TrollShot
-make clean package
+make clean package FLAVOR=deb   # 越狱版：framebuffer 直读，单线程，含 daemon + launchd 自启
+make clean package FLAVOR=ipa   # 非越狱版：CARenderServer，4 线程，仅 App
 ```
 
 发布版构建：
 
 ```sh
-make clean package FINALPACKAGE=1
+make clean package FINALPACKAGE=1 FLAVOR=deb
 ```
 
-本地输出为 `packages/` 目录下的 `.deb`。GitHub Actions 会自动从 staging 提取 `.app` 并打包成 IPA。
+本地输出为 `packages/` 目录下的 `.deb`。GitHub Actions 会分别用两种 FLAVOR 构建一次：deb 产物为 `TrollShot-deb`，ipa 产物从 staging 提取 `.app` 打包成 `TrollShot-ipa`。
+
+不传 FLAVOR 时默认构建 deb 版。如需旧的"运行时自动检测"行为（同一包同时含两条截图路径，仅供调试），可在 Makefile 中把 `TROLLSHOT_DEFS` 置空后构建。
 
 ## 使用方法
 
