@@ -28,21 +28,24 @@ TrollShot 按**安装包类型**固定截图路线（设备运行环境固定，
 
 截图时实时检查 `UIScreen.isCaptured` 状态，镜像未开启时返回 HTTP 503 错误。
 
-### framebuffer 直读画面处理（与 screendump 对齐）
+### framebuffer 直读画面处理（与 screendump 完全对齐）
 
 早期版本曾对 fb 直读画面做过 IOSurface 加锁防花屏和 CIColorMatrix 色彩补偿（逐通道常数减抬升），实测两轮均不理想（补偿后过深过饱和，且色偏随画面内容漂移、非常数）。
 
-对照开源 screendump（alias20 一系，iOS13 VNC 取图方案，`IOMobileFramebufferGetMainDisplay` + `GetLayerDefaultSurface/CopyLayerDisplayedSurface` + `IOSurfaceAcceleratorTransferSurface`）逐行比对后确认：两者的取图调用链完全一致，色偏源自我们多做的后处理环节。现已全部对齐 screendump 的直读语义：
+对照开源 screendump（alias20 一系，iOS13 VNC 取图方案，`IOMobileFramebufferGetMainDisplay` + `GetLayerDefaultSurface/CopyLayerDisplayedSurface` + `IOSurfaceAcceleratorTransferSurface`）逐行比对后确认：两者的取图调用链完全一致，色偏源自我们多做的后处理环节。
+
+通过 RFB 协议同屏抓帧定量对比（screendump 5900 raw 帧 vs TrollShot API JPEG）：fb 层画面完全正常（screendump 与 TrollVNC/CARenderServer 残差 0.1，像素级一致），偏白全部来自我们独有的“缓冲→JPEG”段——三通道均匀 +33/255 加白、残差仅 2.4。据此彻底重写该段，与 screendump 推 VNC 字节完全同语义：
 
 1. 去掉 IOSurface 加锁/解锁（AirPlay 镜像开启后 fb 更新节奏稳定，实测无花屏）；
 2. 去掉 CIColorMatrix 色彩补偿；
-3. CIContext 创建时通过 `kCIContextWorkingColorSpace`/`kCIContextOutputColorSpace` 置空禁用色彩管理——默认色彩管理会对像素做色彩空间转换，是偏暖+过饱和非线性色偏的主要来源；禁用后 CIContext 仅做像素格式搬运，等价于 screendump 的纯字节直读。
+3. 删除自建 surface 的 `kIOSurfaceColorSpace`（sRGB）标签——screendump 的目标 surface 无此标签，额外标签会让 blit/封装环节引入非预期色彩处理；
+4. 废弃 `CVPixelBuffer` → `CIImage` → `CIContext createCGImage` 整条封装链（即使禁用 CIContext 色彩管理仍残留 +33 加白），改为 `IOSurfaceGetBytePointer` 直读字节 + `CGDataProvider` + `CGImageCreate` 纯字节搬运，零色彩处理，仅保留 ImageIO 的 JPEG 编码（对 8bit RGB 直通）。
 
 ### 非越狱模式（TrollStore，以 mobile 用户运行）
 
 1. 通过私有 API `CARenderServerRenderDisplay` 将屏幕内容渲染到 `IOSurface`。
 2. 通过 `IOSurfaceAccelerator` 转换 surface 格式。
-3. 将 surface 零拷贝包装成 `CVPixelBuffer`，再用 `CoreImage` / `ImageIO` 编码为 JPEG。
+3. 直读 surface 字节构建 `CGImage`，用 `ImageIO` 编码为 JPEG（与 fb 直读共用后段，见上节第 4 条）。
 4. HTTP 最大并发 4（原值）。
 
 此方案与 TrollVNC 截屏方式相同，`CARenderServerRenderDisplay` 走 SpringBoard 渲染管道，系统感知到截屏，游戏防截屏不会触发，无需 AirPlay 镜像。

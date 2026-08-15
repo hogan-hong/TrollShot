@@ -139,7 +139,7 @@ static BOOL DetectJailbreak(void) {
     uint32_t mLastSeed;               /* 上次帧的 seed（脏帧检测） */
 
     /* 复用对象（避免每次截图重新创建，减少内存分配和 GC 压力） */
-    CIContext *mCIContext;            /* 复用 CIContext */
+    /* 截图链路已直读 IOSurface 字节，不再使用 CIContext */
     FBSOrientationObserver *mOrientationObserver;  /* 复用方向观察者 */
 
     /* 帧缓存（seed 未变或时间间隔短时直接返回上次结果，减少重复编码） */
@@ -178,16 +178,6 @@ static BOOL DetectJailbreak(void) {
     mHasCachedFrame = NO;
     mLastSeed = 0;
     mLastCaptureTime = 0;
-
-    /* 复用 CIContext（不再每次截图 new 一个）
-     * 禁用工作/输出色彩空间：对齐 screendump 的纯字节直读语义，
-     * CIContext 只做像素格式搬运，不做任何色彩空间转换。
-     * 默认色彩管理曾导致 fb 直读画面非线性色偏（偏暖+过饱和）。 */
-    mCIContext = [CIContext contextWithOptions:@{
-        kCIContextUseSoftwareRenderer : @NO,
-        kCIContextWorkingColorSpace : [NSNull null],
-        kCIContextOutputColorSpace : [NSNull null],
-    }];
 
     /* 复用 FBSOrientationObserver（不再每次截图 new 一个） */
     @try {
@@ -296,15 +286,13 @@ static BOOL DetectJailbreak(void) {
     int width = (int)round(screenSize.width);
     int height = (int)round(screenSize.height);
 
-    unsigned pixelFormat = 0x42475241; /* 'ARGB' */
+    unsigned pixelFormat = 0x42475241; /* 'BGRA'（与 framebuffer 源一致，纯拷贝语义） */
     int bytesPerComponent = sizeof(uint8_t);
     int bytesPerElement = bytesPerComponent * 4;
     int bytesPerRow = (int)IOSurfaceAlignProperty(kIOSurfaceBytesPerRow, bytesPerElement * width);
 
-    CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    CFPropertyListRef colorSpacePropertyList = CGColorSpaceCopyPropertyList(colorSpace);
-    CGColorSpaceRelease(colorSpace);
-
+    /* 注意：不设置 kIOSurfaceColorSpace 标签 -- screendump 的目标 surface 无此标签，
+     * 额外的色彩空间标签会让后续 blit/封装环节引入非预期的色彩处理（实测 +33 加白） */
     mRenderProperties = @{
         (__bridge NSString *)kIOSurfaceBytesPerElement : @(bytesPerElement),
         (__bridge NSString *)kIOSurfaceBytesPerRow : @(bytesPerRow),
@@ -312,7 +300,6 @@ static BOOL DetectJailbreak(void) {
         (__bridge NSString *)kIOSurfaceHeight : @(height),
         (__bridge NSString *)kIOSurfacePixelFormat : @(pixelFormat),
         (__bridge NSString *)kIOSurfaceAllocSize : @(bytesPerRow * height),
-        (__bridge NSString *)kIOSurfaceColorSpace : CFBridgingRelease(colorSpacePropertyList),
     };
 
     mScreenSurface = IOSurfaceCreate((__bridge CFDictionaryRef)mRenderProperties);
@@ -380,15 +367,12 @@ static BOOL DetectJailbreak(void) {
     int width = (int)round(screenSize.width);
     int height = (int)round(screenSize.height);
 
-    unsigned pixelFormat = 0x42475241; /* 'ARGB' */
+    unsigned pixelFormat = 0x42475241; /* 'BGRA'（与 framebuffer 源一致，纯拷贝语义） */
     int bytesPerComponent = sizeof(uint8_t);
     int bytesPerElement = bytesPerComponent * 4;
     int bytesPerRow = (int)IOSurfaceAlignProperty(kIOSurfaceBytesPerRow, bytesPerElement * width);
 
-    CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    CFPropertyListRef colorSpacePropertyList = CGColorSpaceCopyPropertyList(colorSpace);
-    CGColorSpaceRelease(colorSpace);
-
+    /* 不设置 kIOSurfaceColorSpace（与 screendump 一致，避免 blit 引入色彩处理） */
     mRenderProperties = @{
         (__bridge NSString *)kIOSurfaceBytesPerElement : @(bytesPerElement),
         (__bridge NSString *)kIOSurfaceBytesPerRow : @(bytesPerRow),
@@ -396,7 +380,6 @@ static BOOL DetectJailbreak(void) {
         (__bridge NSString *)kIOSurfaceHeight : @(height),
         (__bridge NSString *)kIOSurfacePixelFormat : @(pixelFormat),
         (__bridge NSString *)kIOSurfaceAllocSize : @(bytesPerRow * height),
-        (__bridge NSString *)kIOSurfaceColorSpace : CFBridgingRelease(colorSpacePropertyList),
     };
 
     mScreenSurface = IOSurfaceCreate((__bridge CFDictionaryRef)mRenderProperties);
@@ -523,23 +506,32 @@ static BOOL DetectJailbreak(void) {
         return nil;
     }
 
-    /* 将 IOSurface 零拷贝包装为 CVPixelBuffer */
-    CVPixelBufferRef pixelBuffer = NULL;
-    NSDictionary *attrs = @{(NSString *)kCVPixelBufferIOSurfacePropertiesKey : @{}};
-    CVReturn cvret = CVPixelBufferCreateWithIOSurface(kCFAllocatorDefault, mScreenSurface,
-                                                      (__bridge CFDictionaryRef)attrs, &pixelBuffer);
-    if (cvret != kCVReturnSuccess || !pixelBuffer) {
+    /* 直接从 IOSurface 读字节构建 CGImage -- 与 screendump 推 VNC 字节完全同语义。
+     * 不经 CVPixelBuffer/CIImage/CIContext：实测即使禁用 CIContext 色彩管理，
+     * 该链路仍给画面带来均匀 +33/255 的加白偏移；直读字节零处理。 */
+    size_t surfW = IOSurfaceGetWidth(mScreenSurface);
+    size_t surfH = IOSurfaceGetHeight(mScreenSurface);
+    size_t rowBytes = IOSurfaceGetBytesPerRow(mScreenSurface);
+    void *base = IOSurfaceGetBytePointer(mScreenSurface);
+    if (!base || !rowBytes) {
         if (error)
-            *error = [NSError errorWithDomain:@"TrollShot" code:2 userInfo:@{NSLocalizedDescriptionKey : @"CVPixelBuffer 创建失败"}];
+            *error = [NSError errorWithDomain:@"TrollShot" code:2 userInfo:@{NSLocalizedDescriptionKey : @"IOSurface 字节指针获取失败"}];
         return nil;
     }
-
-    /* 用复用的 CIContext 将缓冲区转为 CGImage（色彩管理已在创建时禁用，纯字节搬运） */
-    CIImage *ciImage = [CIImage imageWithCVPixelBuffer:pixelBuffer];
-
-    CGImageRef cgImage = [mCIContext createCGImage:ciImage fromRect:[ciImage extent]];
-
-    CVPixelBufferRelease(pixelBuffer);
+    NSData *pixelData = [NSData dataWithBytes:base length:rowBytes * surfH];
+    CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)pixelData);
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    /* 'BGRA' 内存布局：小端 32 位 + Alpha 首位（内存序 B,G,R,A），alpha 恒 255，预乘无差 */
+    CGImageRef cgImage = CGImageCreate(surfW, surfH, 8, 32, rowBytes, cs,
+                                       kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst,
+                                       provider, NULL, false, kCGRenderingIntentDefault);
+    CGColorSpaceRelease(cs);
+    CGDataProviderRelease(provider);
+    if (!cgImage) {
+        if (error)
+            *error = [NSError errorWithDomain:@"TrollShot" code:2 userInfo:@{NSLocalizedDescriptionKey : @"CGImageCreate 失败"}];
+        return nil;
+    }
 
     /*
      * 方向校正（CGContext 手动旋转）：
