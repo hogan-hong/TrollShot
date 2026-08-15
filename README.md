@@ -28,11 +28,15 @@ TrollShot 按**安装包类型**固定截图路线（设备运行环境固定，
 
 截图时实时检查 `UIScreen.isCaptured` 状态，镜像未开启时返回 HTTP 503 错误。
 
-### framebuffer 色彩补偿（越狱模式）
+### framebuffer 直读画面处理（与 screendump 对齐）
 
-framebuffer 直读的画面相对系统截图存在固定的白色抬升（G 通道最明显，R/G/B 分别约 +23/+34/+25，单位 1/255），肉眼像蒙了一层白纱：整体提亮、高光溢出、饱和度略降。这是 display framebuffer 层本身的特性，与截图链路无关（CARenderServer 路径无此现象）。
+早期版本曾对 fb 直读画面做过 IOSurface 加锁防花屏和 CIColorMatrix 色彩补偿（逐通道常数减抬升），实测两轮均不理想（补偿后过深过饱和，且色偏随画面内容漂移、非常数）。
 
-处理方式：`ScreenCapturer.mm` 在 fb 路径上用 `CIColorMatrix` 的 biasVector 逐通道减去抬升量（GPU 执行，开销可忽略）。补偿常量定义在文件头 `TROLLSHOT_FB_LIFT_R/G/B`，由同时刻"系统截图 vs fb 直读"逐通道直方图配对标定得出，勿随意改动。补偿后动态范围与系统截图对齐（亮度分布重叠度 76% -> 92%）。
+对照开源 screendump（alias20 一系，iOS13 VNC 取图方案，`IOMobileFramebufferGetMainDisplay` + `GetLayerDefaultSurface/CopyLayerDisplayedSurface` + `IOSurfaceAcceleratorTransferSurface`）逐行比对后确认：两者的取图调用链完全一致，色偏源自我们多做的后处理环节。现已全部对齐 screendump 的直读语义：
+
+1. 去掉 IOSurface 加锁/解锁（AirPlay 镜像开启后 fb 更新节奏稳定，实测无花屏）；
+2. 去掉 CIColorMatrix 色彩补偿；
+3. CIContext 创建时通过 `kCIContextWorkingColorSpace`/`kCIContextOutputColorSpace` 置空禁用色彩管理——默认色彩管理会对像素做色彩空间转换，是偏暖+过饱和非线性色偏的主要来源；禁用后 CIContext 仅做像素格式搬运，等价于 screendump 的纯字节直读。
 
 ### 非越狱模式（TrollStore，以 mobile 用户运行）
 

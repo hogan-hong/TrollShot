@@ -37,14 +37,7 @@
         syslog(priority, fmt, ##__VA_ARGS__); \
 } while(0)
 
-/* framebuffer 直读色彩补偿常数（实测标定，勿随意改动）：
- * 同时刻对比"系统截图 vs fb直读"逐通道直方图配对，display framebuffer
- * 层画面存在固定白色抬升（G 通道最明显），肉眼像蒙了一层白纱。
- * 数值为各通道抬升量，补偿时取负值经 CIColorMatrix biasVector 减去。
- * 详见 README「framebuffer 色彩补偿」一节。 */
-#define TROLLSHOT_FB_LIFT_R 0.090f
-#define TROLLSHOT_FB_LIFT_G 0.131f
-#define TROLLSHOT_FB_LIFT_B 0.108f
+/* framebuffer 直读与 screendump 对齐：不加锁、不补偿、禁用色彩管理（见 README） */
 
 /* 诊断全局变量 */
 size_t g_lastOrigWidth = 0;
@@ -186,8 +179,15 @@ static BOOL DetectJailbreak(void) {
     mLastSeed = 0;
     mLastCaptureTime = 0;
 
-    /* 复用 CIContext（不再每次截图 new 一个） */
-    mCIContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer : @NO}];
+    /* 复用 CIContext（不再每次截图 new 一个）
+     * 禁用工作/输出色彩空间：对齐 screendump 的纯字节直读语义，
+     * CIContext 只做像素格式搬运，不做任何色彩空间转换。
+     * 默认色彩管理曾导致 fb 直读画面非线性色偏（偏暖+过饱和）。 */
+    mCIContext = [CIContext contextWithOptions:@{
+        kCIContextUseSoftwareRenderer : @NO,
+        kCIContextWorkingColorSpace : [NSNull null],
+        kCIContextOutputColorSpace : [NSNull null],
+    }];
 
     /* 复用 FBSOrientationObserver（不再每次截图 new 一个） */
     @try {
@@ -514,25 +514,10 @@ static BOOL DetectJailbreak(void) {
     ;
 
     /* 从源 surface 拷贝到目标 surface（两种模式共用）
-     * framebuffer 直读时：
-     * 1. 锁定源 surface（只读），防止 GPU 同时更新导致花屏
-     * 2. TransferSurface 后锁定目标 surface（只读），强制等待 GPU 写完
-     * 3. 读取完后再解锁，避免读到半成品数据 */
-    BOOL needsLock = (mUseFramebuffer && srcSurface == mFbSurface);
-    uint32_t srcSeed = 0, dstSeed = 0;
-    if (needsLock) {
-        IOSurfaceLock(srcSurface, kIOSurfaceLockReadOnly, &srcSeed);
-    }
+     * 与 screendump 对齐：不加锁。AirPlay 镜像开启后 fb 更新节奏稳定，
+     * 实测无花屏；加锁与 CIColorMatrix 补偿反而引入了非线性色偏。 */
     IOReturn accelRet = IOSurfaceAcceleratorTransferSurface(mAccelerator, srcSurface, mScreenSurface, NULL, NULL, NULL, NULL);
-    if (needsLock) {
-        IOSurfaceUnlock(srcSurface, kIOSurfaceLockReadOnly, &srcSeed);
-        /* 锁定目标 surface 强制等待 GPU 完成写入 */
-        IOSurfaceLock(mScreenSurface, kIOSurfaceLockReadOnly, &dstSeed);
-    }
     if (accelRet != kIOReturnSuccess) {
-        if (needsLock) {
-            IOSurfaceUnlock(mScreenSurface, kIOSurfaceLockReadOnly, &dstSeed);
-        }
         if (error)
             *error = [NSError errorWithDomain:@"TrollShot" code:1 userInfo:@{NSLocalizedDescriptionKey : @"IOSurface 加速器转换失败"}];
         return nil;
@@ -544,41 +529,17 @@ static BOOL DetectJailbreak(void) {
     CVReturn cvret = CVPixelBufferCreateWithIOSurface(kCFAllocatorDefault, mScreenSurface,
                                                       (__bridge CFDictionaryRef)attrs, &pixelBuffer);
     if (cvret != kCVReturnSuccess || !pixelBuffer) {
-        if (needsLock) {
-            IOSurfaceUnlock(mScreenSurface, kIOSurfaceLockReadOnly, &dstSeed);
-        }
         if (error)
             *error = [NSError errorWithDomain:@"TrollShot" code:2 userInfo:@{NSLocalizedDescriptionKey : @"CVPixelBuffer 创建失败"}];
         return nil;
     }
 
-    /* 用复用的 CIContext 将 ARGB 缓冲区转为 CGImage */
+    /* 用复用的 CIContext 将缓冲区转为 CGImage（色彩管理已在创建时禁用，纯字节搬运） */
     CIImage *ciImage = [CIImage imageWithCVPixelBuffer:pixelBuffer];
-
-#if !defined(TROLLSHOT_CA_ONLY)
-    /* framebuffer 直读色彩补偿：
-     * fb 层画面各通道存在固定抬升（见文件头 TROLLSHOT_FB_LIFT_* 注释），
-     * 用 biasVector 逆补偿（GPU 执行，开销可忽略）。仅越狱 fb 路径生效，
-     * CARenderServer 路径画面正常无需补偿。补偿后黑位/高光由后续编码截断。 */
-    if (mUseFramebuffer) {
-        ciImage = [ciImage imageByApplyingFilter:@"CIColorMatrix"
-                             withInputParameters:@{
-            @"inputBiasVector" : [CIVector vectorWithX:-TROLLSHOT_FB_LIFT_R
-                                                     Y:-TROLLSHOT_FB_LIFT_G
-                                                     Z:-TROLLSHOT_FB_LIFT_B
-                                                     W:0.0f],
-        }];
-    }
-#endif
 
     CGImageRef cgImage = [mCIContext createCGImage:ciImage fromRect:[ciImage extent]];
 
     CVPixelBufferRelease(pixelBuffer);
-
-    /* framebuffer 直读：读取完毕，解锁目标 surface */
-    if (needsLock) {
-        IOSurfaceUnlock(mScreenSurface, kIOSurfaceLockReadOnly, &dstSeed);
-    }
 
     /*
      * 方向校正（CGContext 手动旋转）：
