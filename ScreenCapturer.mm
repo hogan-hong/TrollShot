@@ -37,6 +37,15 @@
         syslog(priority, fmt, ##__VA_ARGS__); \
 } while(0)
 
+/* framebuffer 直读色彩补偿常数（实测标定，勿随意改动）：
+ * 同时刻对比"系统截图 vs fb直读"逐通道直方图配对，display framebuffer
+ * 层画面存在固定白色抬升（G 通道最明显），肉眼像蒙了一层白纱。
+ * 数值为各通道抬升量，补偿时取负值经 CIColorMatrix biasVector 减去。
+ * 详见 README「framebuffer 色彩补偿」一节。 */
+#define TROLLSHOT_FB_LIFT_R 0.090f
+#define TROLLSHOT_FB_LIFT_G 0.131f
+#define TROLLSHOT_FB_LIFT_B 0.108f
+
 /* 诊断全局变量 */
 size_t g_lastOrigWidth = 0;
 size_t g_lastOrigHeight = 0;
@@ -545,6 +554,23 @@ static BOOL DetectJailbreak(void) {
 
     /* 用复用的 CIContext 将 ARGB 缓冲区转为 CGImage */
     CIImage *ciImage = [CIImage imageWithCVPixelBuffer:pixelBuffer];
+
+#if !defined(TROLLSHOT_CA_ONLY)
+    /* framebuffer 直读色彩补偿：
+     * fb 层画面各通道存在固定抬升（见文件头 TROLLSHOT_FB_LIFT_* 注释），
+     * 用 biasVector 逆补偿（GPU 执行，开销可忽略）。仅越狱 fb 路径生效，
+     * CARenderServer 路径画面正常无需补偿。补偿后黑位/高光由后续编码截断。 */
+    if (mUseFramebuffer) {
+        ciImage = [ciImage imageByApplyingFilter:@"CIColorMatrix"
+                             withInputParameters:@{
+            @"inputBiasVector" : [CIVector vectorWithX:-TROLLSHOT_FB_LIFT_R
+                                                     Y:-TROLLSHOT_FB_LIFT_G
+                                                     Z:-TROLLSHOT_FB_LIFT_B
+                                                     W:0.0f],
+        }];
+    }
+#endif
+
     CGImageRef cgImage = [mCIContext createCGImage:ciImage fromRect:[ciImage extent]];
 
     CVPixelBufferRelease(pixelBuffer);

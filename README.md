@@ -28,6 +28,12 @@ TrollShot 按**安装包类型**固定截图路线（设备运行环境固定，
 
 截图时实时检查 `UIScreen.isCaptured` 状态，镜像未开启时返回 HTTP 503 错误。
 
+### framebuffer 色彩补偿（越狱模式）
+
+framebuffer 直读的画面相对系统截图存在固定的白色抬升（G 通道最明显，R/G/B 分别约 +23/+34/+25，单位 1/255），肉眼像蒙了一层白纱：整体提亮、高光溢出、饱和度略降。这是 display framebuffer 层本身的特性，与截图链路无关（CARenderServer 路径无此现象）。
+
+处理方式：`ScreenCapturer.mm` 在 fb 路径上用 `CIColorMatrix` 的 biasVector 逐通道减去抬升量（GPU 执行，开销可忽略）。补偿常量定义在文件头 `TROLLSHOT_FB_LIFT_R/G/B`，由同时刻"系统截图 vs fb 直读"逐通道直方图配对标定得出，勿随意改动。补偿后动态范围与系统截图对齐（亮度分布重叠度 76% -> 92%）。
+
 ### 非越狱模式（TrollStore，以 mobile 用户运行）
 
 1. 通过私有 API `CARenderServerRenderDisplay` 将屏幕内容渲染到 `IOSurface`。
