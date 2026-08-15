@@ -512,7 +512,7 @@ static BOOL DetectJailbreak(void) {
     size_t surfW = IOSurfaceGetWidth(mScreenSurface);
     size_t surfH = IOSurfaceGetHeight(mScreenSurface);
     size_t rowBytes = IOSurfaceGetBytesPerRow(mScreenSurface);
-    void *base = IOSurfaceGetBytePointer(mScreenSurface);
+    void *base = IOSurfaceGetBaseAddress(mScreenSurface);
     if (!base || !rowBytes) {
         if (error)
             *error = [NSError errorWithDomain:@"TrollShot" code:2 userInfo:@{NSLocalizedDescriptionKey : @"IOSurface 字节指针获取失败"}];
