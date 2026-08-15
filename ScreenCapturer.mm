@@ -546,9 +546,12 @@ static BOOL DetectJailbreak(void) {
 
     CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)pixelData);
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-    /* 'BGRA' 内存布局：小端 32 位 + Alpha 首位（内存序 B,G,R,A），alpha 恒 255，预乘无差 */
+    /* 'BGRA' 内存布局：小端 32 位 + Alpha 首位（内存序 B,G,R,A）。
+     * 实测 framebuffer surface 的 alpha 字节恒为 223（非 255）：声明 PremultipliedFirst
+     * 会让编码环节按 alpha 做 un-premultiply/白底合成，产生均匀 +32 加白（RFB 定量验证）。
+     * 与 screendump 的 VNC 推流对齐 -- 忽略 alpha，声明 NoneSkipFirst 让 RGB 字节原样直通。 */
     CGImageRef cgImage = CGImageCreate(surfW, surfH, 8, 32, rowBytes, cs,
-                                       kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst,
+                                       kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst,
                                        provider, NULL, false, kCGRenderingIntentDefault);
     CGColorSpaceRelease(cs);
     CGDataProviderRelease(provider);

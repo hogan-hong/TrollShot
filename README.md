@@ -39,7 +39,9 @@ TrollShot 按**安装包类型**固定截图路线（设备运行环境固定，
 1. 去掉 IOSurface 加锁/解锁（AirPlay 镜像开启后 fb 更新节奏稳定，实测无花屏）；
 2. 去掉 CIColorMatrix 色彩补偿；
 3. 删除自建 surface 的 `kIOSurfaceColorSpace`（sRGB）标签——screendump 的目标 surface 无此标签，额外标签会让 blit/封装环节引入非预期色彩处理；
-4. 废弃 `CVPixelBuffer` → `CIImage` → `CIContext createCGImage` 整条封装链（即使禁用 CIContext 色彩管理仍残留 +33 加白），改为 `IOSurfaceGetBytePointer` 直读字节 + `CGDataProvider` + `CGImageCreate` 纯字节搬运，零色彩处理，仅保留 ImageIO 的 JPEG 编码（对 8bit RGB 直通）。
+4. 废弃 `CVPixelBuffer` -> `CIImage` -> `CIContext createCGImage` 整条封装链（即使禁用 CIContext 色彩管理仍残留 +33 加白），改为直读 surface 字节（`IOSurfaceGetBaseAddress`）+ `CGDataProvider` + `CGImageCreate` 纯字节搬运，仅保留 ImageIO 的 JPEG 编码（对 8bit RGB 直通）。
+
+**根因（format=raw 分段定位）**：transfer 后的 RGB 字节与 screendump 逐像素一致（残差 0.0），偏白全部发生在 `CGImageCreate` 之后--framebuffer surface 的 alpha 字节恒为 223（非 255），图像声明为 `kCGImageAlphaPremultipliedFirst` 时编码环节按 alpha 做 un-premultiply/白底合成，产生均匀 +32 加白。修复：声明 `kCGImageAlphaNoneSkipFirst`（alpha 存在但忽略，与 screendump 的 VNC 推流语义一致），RGB 字节原样直通。
 
 ### 非越狱模式（TrollStore，以 mobile 用户运行）
 
