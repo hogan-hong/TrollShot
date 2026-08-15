@@ -161,6 +161,7 @@ GET http://<设备IP>:6688/screenshot
 |------|------|------|
 | `rotate` | `rotate=1` | 强制顺时针旋转 90 度。不加此参数时自动检测设备方向（横屏自动旋转，竖屏不旋转）。 |
 | `crop` | `crop=x1,y1,x2,y2` | 裁剪指定区域。x1,y1 为左上角坐标，x2,y2 为右下角坐标。坐标基于旋转后的最终图像。不加此参数时返回全屏截图。 |
+| `format` | `format=png\|raw` | 诊断用输出格式。`png` 无损编码；`raw` 直接返回 IOSurface transfer 后的原始 BGRA 字节（跳过 CGImage 封装与编码，忽略 rotate/crop），响应头带 `X-Image-Width`/`X-Image-Height`/`X-Row-Bytes`。默认 `jpeg`。 |
 
 #### 示例
 
@@ -176,6 +177,12 @@ GET /screenshot?crop=0,0,667,750
 
 # 旋转 + 裁剪组合使用
 GET /screenshot?rotate=1&crop=0,0,667,750
+
+# 无损 PNG（诊断色彩偏移用）
+GET /screenshot?format=png
+
+# 原始 BGRA 字节（诊断：定位偏移发生在 transfer / CGImage / 编码哪一段）
+GET /screenshot?format=raw
 
 # 健康检查（返回 pong）
 GET /ping

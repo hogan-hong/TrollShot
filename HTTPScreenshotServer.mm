@@ -260,8 +260,16 @@ static void HandleClientConnection(int client) {
                 cropRect.origin.x, cropRect.origin.y,
                 cropRect.origin.x + cropRect.size.width,
                 cropRect.origin.y + cropRect.size.height]]];
+        /* 诊断参数 format=png|raw：raw 返回 transfer 后的原始 BGRA 字节（见 ScreenCapturer.h） */
+        NSString *outFormat = @"jpeg";
+        if (strstr(buf, "format=png")) {
+            outFormat = @"png";
+        } else if (strstr(buf, "format=raw")) {
+            outFormat = @"raw";
+        }
+
         NSError *captureError = nil;
-        NSData *jpeg = [[ScreenCapturer sharedCapturer] captureJPEGWithQuality:0.85 rotate:doRotate cropRect:cropRect error:&captureError];
+        NSData *jpeg = [[ScreenCapturer sharedCapturer] captureWithFormat:outFormat quality:0.85 rotate:doRotate cropRect:cropRect error:&captureError];
         if (captureError) {
             [[TSLogger sharedLogger] log:[NSString stringWithFormat:@"截图失败: %@", captureError.localizedDescription]];
         }
@@ -277,11 +285,19 @@ static void HandleClientConnection(int client) {
         /* 诊断：在响应头输出图像尺寸信息 */
         NSMutableString *header = [NSMutableString string];
         [header appendFormat:@"HTTP/1.1 200 OK\r\n"];
-        [header appendFormat:@"Content-Type: image/jpeg\r\n"];
+        [header appendFormat:@"Content-Type: %@\r\n",
+            [outFormat isEqualToString:@"png"] ? @"image/png"
+            : ([outFormat isEqualToString:@"raw"] ? @"application/octet-stream" : @"image/jpeg")];
         [header appendFormat:@"Content-Length: %lu\r\n", (unsigned long)jpeg.length];
         [header appendFormat:@"X-Orig-Size: %zux%zu\r\n", g_lastOrigWidth, g_lastOrigHeight];
         [header appendFormat:@"X-Final-Size: %zux%zu\r\n", g_lastFinalWidth, g_lastFinalHeight];
         [header appendFormat:@"X-Rotated: %s\r\n", g_lastRotated ? "YES" : "NO"];
+        if ([outFormat isEqualToString:@"raw"]) {
+            [header appendFormat:@"X-Image-Width: %zu\r\n", g_lastRawWidth];
+            [header appendFormat:@"X-Image-Height: %zu\r\n", g_lastRawHeight];
+            [header appendFormat:@"X-Row-Bytes: %zu\r\n", g_lastRowBytes];
+            [header appendString:@"X-Pixel-Format: BGRA\r\n"];
+        }
         if (!CGRectIsEmpty(cropRect)) {
             [header appendFormat:@"X-Crop: %.0f,%.0f,%.0f,%.0f\r\n",
                 cropRect.origin.x, cropRect.origin.y,

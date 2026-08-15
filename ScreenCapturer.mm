@@ -45,6 +45,9 @@ size_t g_lastOrigHeight = 0;
 size_t g_lastFinalWidth = 0;
 size_t g_lastFinalHeight = 0;
 BOOL g_lastRotated = NO;
+size_t g_lastRawWidth = 0;
+size_t g_lastRawHeight = 0;
+size_t g_lastRowBytes = 0;
 BOOL g_isJailbreakMode = NO;
 BOOL g_useFramebuffer = NO;
 BOOL g_needsMirror = NO;  /* 越狱模式：是否需要 AirPlay 镜像维持 isCaptured */
@@ -406,6 +409,10 @@ static BOOL DetectJailbreak(void) {
  * 截图入口：根据模式选择截图路径
  * ============================================================ */
 - (NSData *)captureJPEGWithQuality:(CGFloat)quality rotate:(BOOL)rotate cropRect:(CGRect)cropRect error:(NSError **)error {
+    return [self captureWithFormat:@"jpeg" quality:quality rotate:rotate cropRect:cropRect error:error];
+}
+
+- (NSData *)captureWithFormat:(NSString *)format quality:(CGFloat)quality rotate:(BOOL)rotate cropRect:(CGRect)cropRect error:(NSError **)error {
     if (quality < 0.0)
         quality = 0.0;
     if (quality > 1.0)
@@ -413,7 +420,7 @@ static BOOL DetectJailbreak(void) {
 
     /* 线程安全：同一时间只有一个截图操作 */
     [mLock lock];
-    NSData *result = [self captureInternal:quality rotate:rotate cropRect:cropRect error:error];
+    NSData *result = [self captureInternal:quality rotate:rotate cropRect:cropRect format:format error:error];
     [mLock unlock];
     return result;
 }
@@ -421,7 +428,8 @@ static BOOL DetectJailbreak(void) {
 /* ============================================================
  * 内部截图实现
  * ============================================================ */
-- (NSData *)captureInternal:(CGFloat)quality rotate:(BOOL)rotate cropRect:(CGRect)cropRect error:(NSError **)error {
+- (NSData *)captureInternal:(CGFloat)quality rotate:(BOOL)rotate cropRect:(CGRect)cropRect format:(NSString *)format error:(NSError **)error {
+    BOOL isJPEG = !([format isEqualToString:@"png"] || [format isEqualToString:@"raw"]);
     if (!mScreenSurface || !mAccelerator) {
         if (error)
             *error = [NSError errorWithDomain:@"TrollShot" code:4 userInfo:@{NSLocalizedDescriptionKey : @"IOSurface 加速器未初始化"}];
@@ -454,7 +462,7 @@ static BOOL DetectJailbreak(void) {
         BOOL frameChanged = (currentSeed != mLastSeed);
         mLastSeed = currentSeed;
 
-        if (!frameChanged && mHasCachedFrame && !rotate && CGRectIsEmpty(cropRect)) {
+        if (!frameChanged && mHasCachedFrame && isJPEG && !rotate && CGRectIsEmpty(cropRect)) {
             /* 帧没变，且不需要旋转/裁剪，直接返回缓存 */
             TSLog(LOG_NOTICE, "[TrollShot] 帧未变化(seed=%u)，返回缓存 JPEG", currentSeed);
             return mCachedJPEG;
@@ -471,7 +479,7 @@ static BOOL DetectJailbreak(void) {
          * 时间缓存：300ms 内重复请求直接返回上次结果，减少 mach IPC 开销
          * ==================================================== */
         NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
-        if (mHasCachedFrame && !rotate && CGRectIsEmpty(cropRect) && (now - mLastCaptureTime) < 0.3) {
+        if (mHasCachedFrame && isJPEG && !rotate && CGRectIsEmpty(cropRect) && (now - mLastCaptureTime) < 0.3) {
             TSLog(LOG_NOTICE, "[TrollShot] CARenderServer 时间缓存命中（%.0fms），返回缓存", (now - mLastCaptureTime) * 1000);
             return mCachedJPEG;
         }
@@ -519,6 +527,23 @@ static BOOL DetectJailbreak(void) {
         return nil;
     }
     NSData *pixelData = [NSData dataWithBytes:base length:rowBytes * surfH];
+
+    /* format=raw 诊断端点：transfer 后的原始 BGRA 字节直接返回，
+     * 不经 CGImageCreate / 旋转 / 编码 -- 用于定位 +33 偏移发生在哪个环节 */
+    if ([format isEqualToString:@"raw"]) {
+        g_lastRawWidth = surfW;
+        g_lastRawHeight = surfH;
+        g_lastRowBytes = rowBytes;
+        g_lastOrigWidth = surfW;
+        g_lastOrigHeight = surfH;
+        g_lastFinalWidth = surfW;
+        g_lastFinalHeight = surfH;
+        g_lastRotated = NO;
+        TSLog(LOG_NOTICE, "[TrollShot] format=raw: %zux%zu rowBytes=%zu 共 %lu 字节",
+              surfW, surfH, rowBytes, (unsigned long)pixelData.length);
+        return pixelData;
+    }
+
     CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)pixelData);
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
     /* 'BGRA' 内存布局：小端 32 位 + Alpha 首位（内存序 B,G,R,A），alpha 恒 255，预乘无差 */
@@ -629,9 +654,11 @@ static BOOL DetectJailbreak(void) {
         }
 
         NSMutableData *data = [NSMutableData data];
-        CGImageDestinationRef dest = CGImageDestinationCreateWithData((__bridge CFMutableDataRef)data, CFSTR("public.jpeg"), 1, NULL);
+        BOOL isPNG = [format isEqualToString:@"png"];
+        CGImageDestinationRef dest = CGImageDestinationCreateWithData((__bridge CFMutableDataRef)data,
+            isPNG ? CFSTR("public.png") : CFSTR("public.jpeg"), 1, NULL);
         if (dest) {
-            NSDictionary *props = @{
+            NSDictionary *props = isPNG ? @{} : @{
                 (__bridge NSString *)kCGImageDestinationLossyCompressionQuality : @(quality),
             };
             CGImageDestinationAddImage(dest, cgImage, (__bridge CFDictionaryRef)props);
@@ -647,8 +674,8 @@ static BOOL DetectJailbreak(void) {
         *error = [NSError errorWithDomain:@"TrollShot" code:3 userInfo:@{NSLocalizedDescriptionKey : @"JPEG 编码失败"}];
     }
 
-    /* 缓存帧结果（仅在无旋转无裁剪时缓存，两种模式共用） */
-    if (jpegData && !rotate && CGRectIsEmpty(cropRect)) {
+    /* 缓存帧结果（仅在 JPEG 且无旋转无裁剪时缓存，两种模式共用） */
+    if (jpegData && isJPEG && !rotate && CGRectIsEmpty(cropRect)) {
         mCachedJPEG = jpegData;
         mHasCachedFrame = YES;
     }
