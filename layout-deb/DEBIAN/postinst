@@ -51,15 +51,22 @@ if [ -d /Applications/TrollShot.app ]; then
     uicache -p /Applications/TrollShot.app >/dev/null 2>&1 || uicache >/dev/null 2>&1
 fi
 
-# 延迟重启 SpringBoard 加载 airplay-autolink tweak（注入 SB 的 dylib 必须 respring 才生效；
-# 注意 Theos 的 after-install 只在 make install 流程执行，dpkg -i 走本脚本，必须在此 respring）。
-# 必须延迟：若 postinst 内立即 killall，SpringBoard 死时会把运行中的包管理器 GUI
-# （Zebra/Sileo，属 GUI app）一并杀掉，dpkg 流程中途被斩断、状态库写坏
-# （实测 172.16.103.104 出现"幽灵安装"：dpkg 显示已装但文件全部缺失）。
-# 延迟 12 秒让 dpkg/cydia triggers 先收完尾，再后台 respring。
+# respring 加载 airplay-autolink tweak（注入 SB 的 dylib 必须 respring 才生效；
+# 注意 Theos 的 after-install 只在 make install 流程执行，dpkg -i 走本脚本，必须在此处理）。
+# 按安装途径区分（2026-08-17 幽灵安装事故后修订）：
+# - GUI 包管理器（Zebra/Sileo）安装：本脚本不杀 SpringBoard。包内含 MobileSubstrate
+#   tweak，GUI 安装完成页会自动出现"重启 SpringBoard"按钮，由用户点击触发（与其他
+#   插件行为一致）；若脚本自行 respring，会打断 GUI 内连续安装队列、甚至再次引发
+#   dpkg 状态库写坏（172.16.103.104 幽灵安装：GUI 被斩断后 dpkg 显示已装但文件全无）。
+# - SSH/命令行无人值守安装：无人点按钮，延迟 12 秒后台自动 respring（延迟是为了
+#   让 dpkg/cydia triggers 先收尾；stdin/stdout 重定向防会话悬挂）。
 if [ -f /Library/MobileSubstrate/DynamicLibraries/airplay-autolink.dylib ]; then
-    echo "TrollShot: 12 秒后自动重启 SpringBoard（加载 AirPlay 自动连接 tweak）..."
-    (sleep 12; killall -9 SpringBoard) </dev/null >/dev/null 2>&1 &
+    if ps ax 2>/dev/null | grep -iE "zebra|sileo" | grep -v grep >/dev/null 2>&1; then
+        echo "TrollShot: 检测到 GUI 包管理器安装，跳过自动 respring（请在完成页点击重启 SpringBoard）"
+    else
+        echo "TrollShot: 12 秒后自动重启 SpringBoard（加载 AirPlay 自动连接 tweak）..."
+        (sleep 12; killall -9 SpringBoard) </dev/null >/dev/null 2>&1 &
+    fi
 fi
 
 exit 0

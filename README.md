@@ -124,15 +124,19 @@ dpkg -i com.hoganhong.trollshot_<版本>_iphoneos-arm.deb   # 安装即含 tweak
 3. **显式执行 `uicache` 重建图标缓存**：卸载重装或异常安装后，SpringBoard
    respring 的自动重扫并不总是刷新图标缓存（实测出现过桌面无图标、资源库
    搜不到），必须显式重建；
-4. **延迟 12 秒后台 respring**：tweak dylib 注入 SpringBoard 必须 respring 才
-   生效，但不能在 postinst 内立即杀——若用户正用 Zebra/Sileo 等 GUI 包管理器
-   安装，SpringBoard 死时会把包管理器一并杀掉，dpkg 流程中途被斩断、状态库
-   写坏，出现"幽灵安装"（dpkg 显示已装但文件全部缺失，需 `dpkg --purge` 后
-   重装才能恢复）。延迟 12 秒让 dpkg / cydia triggers 先收完尾再 respring。
+4. **respring 按安装途径自动区分**：
+   - **GUI 包管理器（Zebra/Sileo）安装：脚本不自动 respring**。包内含
+     MobileSubstrate tweak，GUI 安装完成页会自动出现"重启 SpringBoard"按钮
+     （与其他插件一致），点击后 tweak 生效；避免脚本自行 respring 打断 GUI
+     内的连续安装队列、或引发"幽灵安装"（dpkg 显示已装但文件全无，需
+     `dpkg --purge` 后重装才能恢复）。
+   - **SSH/命令行无人值守安装**（机队批量路径）：无人点按钮，脚本延迟 12 秒
+     后台自动 respring 让 tweak dylib 加载生效；延迟是为了让 dpkg / cydia
+     triggers 先收尾，防止安装流程被斩断。
 
-升级注意：升级期间设备会短暂断开 AirPlay 镜像（respring），tweak 重载后
-自动重连；用 GUI 包管理器升级时，看到"安装完成"提示后请等待约 15 秒再
-操作设备（后台 respring 尚未执行）。
+升级注意：升级期间设备会短暂断开 AirPlay 镜像（respring），tweak 重载后自动重连。
+GUI 安装完成后请点击完成页的"重启 SpringBoard"按钮；SSH 安装约 15 秒后自动
+respring，期间保持设备供电即可。
 
 ## 版本号规则
 
