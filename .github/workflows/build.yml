@@ -163,11 +163,3 @@ jobs:
           name: TrollShot-deb
           path: artifacts/*.deb
           if-no-files-found: error
-
-      - name: 上传解包调试信息
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: package-debug
-          path: .theos/_
-          if-no-files-found: ignore
