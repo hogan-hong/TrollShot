@@ -36,7 +36,10 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
 #define kLaunchdPlistName  @"com.hogan.trollshot.plist"
 #define kDaemonDestDir     @"/var/mobile/trollshot"
 #define kLogDir            @"/var/mobile/trollshot"
-#define kListenPort        6688
+#define kDefaultPort       6688
+#define kApiPortFile       @"/var/mobile/trollshot/api_port"
+#define kAutolinkPlist     @"/var/mobile/Library/Preferences/com.hoganhong.airplay-autolink.plist"
+#define kDefaultAirplayName @"TrollShot"
 #define kDebugFlagFile     @"/var/mobile/trollshot/debug_mode"
 #define kSystemPlistPath   @"/Library/LaunchDaemons/com.hogan.trollshot.plist"
 
@@ -88,6 +91,49 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
 + (void)clearLogFile {
     NSString *logPath = [kLogDir stringByAppendingPathComponent:@"trollshotd.log"];
     [@"" writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+
+/* 读取 API 端口（默认 6688，非法值回退默认） */
++ (NSInteger)apiPort {
+    NSString *content = [NSString stringWithContentsOfFile:kApiPortFile
+                                                  encoding:NSUTF8StringEncoding
+                                                     error:nil];
+    NSInteger p = [content stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]].integerValue;
+    return (p >= 1 && p <= 65535) ? p : kDefaultPort;
+}
+
+/* 设置 API 端口，写入标志文件。返回是否写入成功 */
++ (BOOL)setApiPort:(NSInteger)port {
+    if (port < 1 || port > 65535) return NO;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:kDaemonDestDir]) {
+        [fm createDirectoryAtPath:kDaemonDestDir
+              withIntermediateDirectories:YES
+                               attributes:nil
+                                    error:nil];
+    }
+    NSString *content = [NSString stringWithFormat:@"%ld", (long)port];
+    return [content writeToFile:kApiPortFile
+                      atomically:YES
+                        encoding:NSUTF8StringEncoding
+                           error:nil];
+}
+
+/* 读取 AirPlay 服务器名（默认 TrollShot） */
++ (NSString *)airplayServerName {
+    NSDictionary *p = [NSDictionary dictionaryWithContentsOfFile:kAutolinkPlist];
+    NSString *n = p[@"target"];
+    return ([n isKindOfClass:[NSString class]] && n.length > 0) ? n : kDefaultAirplayName;
+}
+
+/* 设置 AirPlay 服务器名，写入 tweak 的 plist target 键（保留其他键）。
+ * tweak 断开转变时热加载，即时生效 */
++ (BOOL)setAirplayServerName:(NSString *)name {
+    if (name.length == 0) return NO;
+    NSDictionary *old = [NSDictionary dictionaryWithContentsOfFile:kAutolinkPlist];
+    NSMutableDictionary *p = [NSMutableDictionary dictionaryWithDictionary:(old ?: @{})];
+    p[@"target"] = name;
+    return [p writeToFile:kAutolinkPlist atomically:YES];
 }
 
 /* 获取 IPA 内部的 daemon 路径 */
@@ -167,7 +213,7 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(kListenPort);
+    addr.sin_port = htons((int)[TrollShotManager apiPort]);
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
     /* 1 秒超时，避免 UI 卡顿 */
@@ -268,9 +314,10 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
     }
     const char *cPath = [daemonPath fileSystemRepresentation];
 
-    /* 根据调试模式标志决定启动参数 */
+    /* 根据调试模式标志与配置端口决定启动参数 */
     BOOL debug = [TrollShotManager isDebugMode];
-    NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObjects:@"--port", @"6688", nil];
+    NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObjects:
+        @"--port", [NSString stringWithFormat:@"%ld", (long)[TrollShotManager apiPort]], nil];
     if (debug) {
         [args addObject:@"--debug"];
     }
@@ -558,7 +605,7 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(kListenPort);
+    addr.sin_port = htons((int)[TrollShotManager apiPort]);
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
     /* 设置 2 秒超时，避免 daemon 无响应时卡住 */
@@ -664,15 +711,15 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
         struct sockaddr_in addr;
         memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
-        addr.sin_port = htons(kListenPort);
+        addr.sin_port = htons((int)[TrollShotManager apiPort]);
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         int canConnect = connect(sockfd, (struct sockaddr *)&addr, sizeof(addr));
         close(sockfd);
         if (canConnect == 0) {
-            NSLog(@"[TrollShot] 警告：端口 %d 仍被占用！", kListenPort);
+            NSLog(@"[TrollShot] 警告：端口 %d 仍被占用！", (int)[TrollShotManager apiPort]);
             return NO;
         }
-        NSLog(@"[TrollShot] 端口 %d 已释放", kListenPort);
+        NSLog(@"[TrollShot] 端口 %d 已释放", (int)[TrollShotManager apiPort]);
     }
     return YES;
 }

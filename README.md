@@ -102,6 +102,21 @@ App 会自动检测运行环境：
 
 越狱设备只装 deb、不装 ipa；非越狱设备只装 ipa、不装 deb。设备状态固定，无需运行时判断。
 
+2026-08-17 起 deb 包内置 `airplay-autolink` tweak（AirPlay 镜像自动连接守护，v7.0 整合），
+与早期独立发行的 `com.hoganhong.airplay-autolink` 包互斥（control 已声明 Conflicts/Replaces）。
+旧设备升级命令：
+
+```sh
+dpkg -r com.hoganhong.airplay-autolink   # 先卸独立包（可跳过，dpkg 会提示冲突再处理）
+dpkg -i com.hoganhong.trollshot_<版本>_iphoneos-arm.deb   # 安装即含 tweak，装完自动 respring
+```
+
+## 版本号规则
+
+GitHub Actions 每次构建把 `1.0.<构建号>` 注入 deb 的 `Version` 与 App 的
+`CFBundleShortVersionString`（主界面标题实时显示），产物文件名同步带版本号，
+不再固定 1.0.0。本地构建保持 `control` 里的默认版本。
+
 ## 构建要求
 
 - macOS 已安装 Xcode Command Line Tools
@@ -141,15 +156,43 @@ make clean package FINALPACKAGE=1 FLAVOR=deb
 
 ### 越狱模式使用流程
 
-越狱设备使用 framebuffer 直读模式时，需要先开启 AirPlay 屏幕镜像：
+越狱设备使用 framebuffer 直读模式时需要 AirPlay 屏幕镜像维持 `isCaptured` 状态。
+deb 包内置的 `airplay-autolink` tweak 会在设备启动、镜像断开时**自动**发现并连接
+UxPlay 服务器，正常情况零人工操作：
 
-1. 在局域网内部署 UxPlay 服务器（Docker 方式，支持多设备同时连接）。
-2. iPhone 打开"控制中心" -> "屏幕镜像" -> 选择 `TrollShot-AirPlay`。
-3. 开启 TrollShot 服务。
-4. 访问 `http://<设备IP>:6688/status` 确认镜像状态为 `ok`。
-5. 访问 `http://<设备IP>:6688/screenshot` 获取彩色截图。
+1. 在局域网内部署 UxPlay 服务器（Docker 方式，支持多设备同时连接，服务名默认 `TrollShot-AirPlay`）。
+2. 安装 deb 包（自动 respring 生效）。确认 TrollShot App 主界面"AirPlay服务器"与
+   服务器广播名一致（默认一致，包含匹配）。
+3. 十几秒内镜像自动建立。访问 `http://<设备IP>:<API端口>/status` 确认镜像状态为 `ok`。
+4. 访问 `http://<设备IP>:<API端口>/screenshot` 获取彩色截图。
 
 > 未开启 AirPlay 镜像时，截图请求返回 HTTP 503，响应头包含 `X-Mirror-Status: inactive`。
+
+### 主界面配置项
+
+| 配置项 | 默认值 | 存储 | 生效方式 |
+|--------|--------|------|----------|
+| API 端口 | `6688` | `/var/mobile/trollshot/api_port` | 编辑结束保存，daemon 运行中自动重启生效 |
+| AirPlay 服务器名 | `TrollShot` | `/var/mobile/Library/Preferences/com.hoganhong.airplay-autolink.plist` 的 `target` 键 | 编辑结束保存，tweak 在下次镜像断开转变时热加载，无需重启 SpringBoard |
+
+## AirPlay 自动连接（airplay-autolink，v7.0 整合）
+
+deb 包内置注入 SpringBoard 的守护 tweak（`/Library/MobileSubstrate/DynamicLibraries/airplay-autolink.dylib`），
+基于 v6.8.1 定版（KVO 秒级断开感知 + 120 秒兜底轮询 + 单链不变量，见独立仓库历史文档），
+整合后新增两项能力：
+
+1. **断开清理上报**：检测到镜像断开（含设备重启后的首次判定）时，自动通过 Bonjour
+   按配置的服务器名解析 `_airplay._tcp` 得到 UxPlay 地址，调用
+   `GET /cleanup?name=<本机设备名>`（UxPlay-AirPlay-Docker 2026-08-17 新增接口），
+   服务器立即清除本设备残留的半死会话（否则约 6 分钟超时期间重连会被干扰），
+   随后走正常自动重连。失败不影响重连流程，30 秒限频。
+2. **配置热加载**：每次断开转变时重读 plist，App 界面改"AirPlay服务器"即时生效。
+
+设备识别使用**设备名**而非 MAC：同一设备 wifi/USB 转网卡切换后 MAC 会变，
+设备名稳定唯一（服务器端 /cleanup 按名精确匹配 AirPlay 握手时设备自报名）。
+
+日志：`/var/mobile/Library/Logs/airplay-autolink.log`（🧹 前缀为清理上报）。
+详细参数（`interval`/`fallback` 等进阶键）见 plist 内注释与独立仓库 README。
 
 ### API 接口
 
@@ -291,7 +334,9 @@ App 界面提供「调试模式」开关按钮：
 - `ScreenCapturer.{h,mm}` - 通过私有 API 截屏，越狱模式用 IOMobileFramebuffer 直读（需 AirPlay 镜像维持 isCaptured），非越狱模式用 CARenderServerRenderDisplay；包含脏帧检测、帧缓存、旋转（FBSOrientationObserver）和裁剪逻辑
 - `HTTPScreenshotServer.{h,mm}` - 迷你 HTTP 服务器，解析 `rotate` / `crop` 查询参数，提供 `/status` 镜像状态检查
 - `trollshotd.mm` - 后台 daemon 入口，解析 `--debug` 参数
-- `TrollShotManager.{h,m}` - 启动/停止 daemon 的管理逻辑，调试模式标志读写，stdout/stderr 重定向控制
+- `TrollShotManager.{h,m}` - 启动/停止 daemon 的管理逻辑，调试模式标志读写，API 端口与 AirPlay 服务器名配置读写，stdout/stderr 重定向控制
+- `airplay-autolink/Tweak.xm` - AirPlay 镜像自动连接 tweak（v7.0 整合）：KVO 秒级断开感知 + 兜底轮询 + 断开清理上报（Bonjour 解析 + `/cleanup` 接口）+ 配置热加载；仅 deb 构建
+- `airplay-autolink.plist` - Substitute/Substrate 注入过滤器（仅 SpringBoard）
 - `TSLogger.{h,m}` - 日志管理器，懒加载写入 `/var/mobile/Documents/TrollShot.log`，受 `debugEnabled` 控制
 - `AppDelegate.{h,m}` / `main.m` - iOS 应用启动入口，含调试模式开关按钮
 

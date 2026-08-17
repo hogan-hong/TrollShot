@@ -38,6 +38,18 @@ jobs:
           cp -R /tmp/theos-sdks/iPhoneOS14.5.sdk $THEOS/sdks/
           ls -la $THEOS/sdks/
 
+      - name: 注入版本号（随 GitHub 构建号递增）
+        run: |
+          VERSION="1.0.${{ github.run_number }}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          # deb control 版本
+          sed -i '' "s/^Version: .*/Version: $VERSION/" control
+          # App 界面标题显示的版本（CFBundleShortVersionString）
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" Info.plist
+          echo "=== 版本号: $VERSION ==="
+          cat control
+
       - name: 构建 deb（越狱版：framebuffer 直读，单线程）
         id: build_deb
         run: |
@@ -61,12 +73,17 @@ jobs:
 
           echo "=== 用 gzip 压缩重建 deb (rootful 兼容) ==="
           rm -f packages/*.deb
-          dpkg-deb -Zgzip -b .theos/_ packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm.deb
+          dpkg-deb -Zgzip -b .theos/_ "packages/com.hoganhong.trollshot_${VERSION}_iphoneos-arm.deb"
           echo "=== 重建后的 deb 信息 ==="
-          dpkg-deb -I packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm.deb
-          dpkg-deb -c packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm.deb | grep -E "trollshotd|\.plist|postinst|prerm"
+          dpkg-deb -I "packages/com.hoganhong.trollshot_${VERSION}_iphoneos-arm.deb"
+          dpkg-deb -c "packages/com.hoganhong.trollshot_${VERSION}_iphoneos-arm.deb" | grep -E "trollshotd|\.plist|postinst|prerm"
           echo "=== 验证 DEBIAN 脚本 ==="
-          dpkg-deb --info packages/com.hoganhong.trollshot_1.0.0_iphoneos-arm.deb || true
+          dpkg-deb --info "packages/com.hoganhong.trollshot_${VERSION}_iphoneos-arm.deb" || true
+
+          echo "=== 验证 tweak dylib 已进包（airplay-autolink） ==="
+          dpkg-deb -c "packages/com.hoganhong.trollshot_${VERSION}_iphoneos-arm.deb" | grep -i "airplay-autolink" || {
+            echo "❌ deb 中缺少 airplay-autolink tweak！"; exit 1
+          }
 
           echo "=== 转存 deb 产物（后续 ipa 构建会清理 packages 目录） ==="
           mkdir -p artifacts

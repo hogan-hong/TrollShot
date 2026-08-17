@@ -21,16 +21,27 @@ is_debug() {
     [ -f "$DEBUG_FLAG" ] && [ "$(cat "$DEBUG_FLAG" 2>/dev/null)" = "1" ]
 }
 
+# 读取 API 端口（TrollShot App 主界面可改，非法/缺失回退 6688）
+read_api_port() {
+    local p
+    p=$(cat /var/mobile/trollshot/api_port 2>/dev/null)
+    case "$p" in
+        ''|*[!0-9]*) p=6688 ;;
+    esac
+    API_PORT=$p
+}
+
 while true; do
     if [ ! -f /var/mobile/trollshot/stop.flag ]; then
+        read_api_port
         if is_debug; then
             # 调试模式：重定向日志到文件，启动前清空旧日志（避免无限增长）
             > "$LOG_FILE"
-            /usr/bin/trollshotd --port 6688 >> "$LOG_FILE" 2>&1
+            /usr/bin/trollshotd --port "$API_PORT" >> "$LOG_FILE" 2>&1
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] trollshotd 退出(调试模式)，1秒后重启" >> "$WRAPPER_LOG" 2>/dev/null
         else
             # 非调试模式：丢弃日志输出
-            /usr/bin/trollshotd --port 6688 > /dev/null 2>&1
+            /usr/bin/trollshotd --port "$API_PORT" > /dev/null 2>&1
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] trollshotd 退出，1秒后重启" >> "$WRAPPER_LOG" 2>/dev/null
         fi
     else

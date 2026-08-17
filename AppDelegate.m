@@ -13,10 +13,12 @@
 #import <arpa/inet.h>
 #import <ifaddrs.h>
 
-@interface AppDelegate ()
+@interface AppDelegate () <UITextFieldDelegate>
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIButton *toggleButton;
 @property (nonatomic, strong) UIButton *debugButton;
+@property (nonatomic, strong) UITextField *portField;
+@property (nonatomic, strong) UITextField *airplayField;
 @end
 
 @implementation AppDelegate
@@ -27,16 +29,18 @@
     UIViewController *rootVC = [[UIViewController alloc] init];
     rootVC.view.backgroundColor = [UIColor blackColor];
 
-    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 80, rootVC.view.bounds.size.width - 40, 80)];
+    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 60, rootVC.view.bounds.size.width - 40, 70)];
     titleLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     titleLabel.textColor = [UIColor whiteColor];
     titleLabel.textAlignment = NSTextAlignmentCenter;
     titleLabel.numberOfLines = 0;
     titleLabel.font = [UIFont boldSystemFontOfSize:20];
-    titleLabel.text = @"TrollShot\n屏幕截图服务";
+    /* 标题下带构建版本号（CI 注入 Info.plist，随 GitHub 构建号递增） */
+    NSString *shortVer = [[NSBundle mainBundle] infoDictionary][@"CFBundleShortVersionString"] ?: @"1.0.0";
+    titleLabel.text = [NSString stringWithFormat:@"TrollShot 屏幕截图服务\nv%@", shortVer];
     [rootVC.view addSubview:titleLabel];
 
-    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 180, rootVC.view.bounds.size.width - 40, 80)];
+    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 140, rootVC.view.bounds.size.width - 40, 70)];
     self.statusLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     self.statusLabel.textColor = [UIColor whiteColor];
     self.statusLabel.textAlignment = NSTextAlignmentCenter;
@@ -44,8 +48,54 @@
     self.statusLabel.font = [UIFont systemFontOfSize:16];
     [rootVC.view addSubview:self.statusLabel];
 
+    /* 配置行：左侧标签 + 右侧输入框 */
+    CGFloat cfgY[] = {225, 275};
+    UILabel *portLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, cfgY[0], 130, 34)];
+    portLabel.text = @"API 端口：";
+    portLabel.textColor = [UIColor whiteColor];
+    portLabel.font = [UIFont systemFontOfSize:15];
+    portLabel.textAlignment = NSTextAlignmentRight;
+    [rootVC.view addSubview:portLabel];
+
+    self.portField = [[UITextField alloc] initWithFrame:CGRectMake(160, cfgY[0], rootVC.view.bounds.size.width - 180, 34)];
+    self.portField.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    self.portField.delegate = self;
+    self.portField.tag = 1;
+    self.portField.keyboardType = UIKeyboardTypeNumberPad;
+    self.portField.textColor = [UIColor whiteColor];
+    self.portField.font = [UIFont systemFontOfSize:15];
+    self.portField.backgroundColor = [UIColor colorWithWhite:0.15 alpha:1.0];
+    self.portField.layer.cornerRadius = 6;
+    self.portField.textAlignment = NSTextAlignmentCenter;
+    self.portField.text = [NSString stringWithFormat:@"%ld", (long)[TrollShotManager apiPort]];
+    self.portField.placeholder = @"6688";
+    [rootVC.view addSubview:self.portField];
+
+    UILabel *airplayLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, cfgY[1], 130, 34)];
+    airplayLabel.text = @"AirPlay服务器：";
+    airplayLabel.textColor = [UIColor whiteColor];
+    airplayLabel.font = [UIFont systemFontOfSize:15];
+    airplayLabel.adjustsFontSizeToFitWidth = YES;
+    airplayLabel.textAlignment = NSTextAlignmentRight;
+    [rootVC.view addSubview:airplayLabel];
+
+    self.airplayField = [[UITextField alloc] initWithFrame:CGRectMake(160, cfgY[1], rootVC.view.bounds.size.width - 180, 34)];
+    self.airplayField.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    self.airplayField.delegate = self;
+    self.airplayField.tag = 2;
+    self.airplayField.autocorrectionType = UITextAutocorrectionTypeNo;
+    self.airplayField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    self.airplayField.textColor = [UIColor whiteColor];
+    self.airplayField.font = [UIFont systemFontOfSize:15];
+    self.airplayField.backgroundColor = [UIColor colorWithWhite:0.15 alpha:1.0];
+    self.airplayField.layer.cornerRadius = 6;
+    self.airplayField.textAlignment = NSTextAlignmentCenter;
+    self.airplayField.text = [TrollShotManager airplayServerName];
+    self.airplayField.placeholder = @"TrollShot";
+    [rootVC.view addSubview:self.airplayField];
+
     self.toggleButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.toggleButton.frame = CGRectMake(40, 300, rootVC.view.bounds.size.width - 80, 50);
+    self.toggleButton.frame = CGRectMake(40, 335, rootVC.view.bounds.size.width - 80, 50);
     self.toggleButton.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     [self.toggleButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     self.toggleButton.titleLabel.font = [UIFont boldSystemFontOfSize:18];
@@ -56,7 +106,7 @@
 
     /* 调试模式按钮 */
     self.debugButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.debugButton.frame = CGRectMake(40, 370, rootVC.view.bounds.size.width - 80, 44);
+    self.debugButton.frame = CGRectMake(40, 395, rootVC.view.bounds.size.width - 80, 44);
     self.debugButton.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     [self.debugButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     self.debugButton.titleLabel.font = [UIFont systemFontOfSize:16];
@@ -65,6 +115,11 @@
     self.debugButton.layer.borderColor = [UIColor grayColor].CGColor;
     [self.debugButton addTarget:self action:@selector(toggleDebugMode:) forControlEvents:UIControlEventTouchUpInside];
     [rootVC.view addSubview:self.debugButton];
+
+    /* 点击空白处收起键盘并保存 */
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissKeyboard)];
+    tap.cancelsTouchesInView = NO;
+    [rootVC.view addGestureRecognizer:tap];
 
     self.window.rootViewController = rootVC;
     [self.window makeKeyAndVisible];
@@ -85,10 +140,11 @@
     TrollShotManager *mgr = [TrollShotManager sharedManager];
     BOOL running = mgr.isDaemonRunning;
     BOOL debug = [TrollShotManager isDebugMode];
+    NSInteger port = [TrollShotManager apiPort];
 
     if (running) {
         NSString *ip = [self localIPAddress];
-        self.statusLabel.text = [NSString stringWithFormat:@"服务状态：运行中\n访问 http://%@:6688/screenshot", ip];
+        self.statusLabel.text = [NSString stringWithFormat:@"服务状态：运行中\n访问 http://%@:%ld/screenshot", ip, (long)port];
         [self.toggleButton setTitle:@"停止服务" forState:UIControlStateNormal];
     } else {
         self.statusLabel.text = @"服务状态：已停止\n点击下方按钮启动";
@@ -217,6 +273,51 @@
                                                                     preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:nil]];
             [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
+        }
+    }
+}
+
+#pragma mark - 配置输入框
+
+/* 点击空白收起键盘（触发 DidEndEditing 保存） */
+- (void)dismissKeyboard {
+    [self.portField resignFirstResponder];
+    [self.airplayField resignFirstResponder];
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [textField resignFirstResponder];
+    return YES;
+}
+
+/* 编辑结束保存配置：
+ * 端口 -> 写标志文件 + daemon 运行中自动重启生效
+ * AirPlay 服务器名 -> 写 tweak plist，断开转变时热加载即时生效 */
+- (void)textFieldDidEndEditing:(UITextField *)textField {
+    if (textField.tag == 1) {
+        NSInteger port = textField.text.integerValue;
+        if (port < 1 || port > 65535) {
+            textField.text = [NSString stringWithFormat:@"%ld", (long)[TrollShotManager apiPort]];
+            return;
+        }
+        if (port == [TrollShotManager apiPort]) return;
+        if (![TrollShotManager setApiPort:port]) {
+            textField.text = [NSString stringWithFormat:@"%ld", (long)[TrollShotManager apiPort]];
+            return;
+        }
+        [self restartDaemonIfNeeded];
+        [self refreshUI];
+    } else if (textField.tag == 2) {
+        NSString *name = [textField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if (name.length == 0) {
+            textField.text = [TrollShotManager airplayServerName];
+            return;
+        }
+        if ([name isEqualToString:[TrollShotManager airplayServerName]]) return;
+        if ([TrollShotManager setAirplayServerName:name]) {
+            NSLog(@"[TrollShot] AirPlay 服务器名已保存: %@（tweak 断开转变时热加载生效）", name);
+        } else {
+            textField.text = [TrollShotManager airplayServerName];
         }
     }
 }

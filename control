@@ -2,8 +2,10 @@ Package: com.hoganhong.trollshot
 Name: TrollShot
 Version: 1.0.0
 Architecture: iphoneos-arm64
-Description: 极简 HTTP 截图服务器，仅适用于 TrollStore
+Description: 极简 HTTP 截图服务器（含 AirPlay 镜像自动连接 tweak）
 Maintainer: hogan-hong
 Author: hogan-hong
 Section: Utilities
 Depends: firmware (>= 14.0)
+Conflicts: com.hoganhong.airplay-autolink
+Replaces: com.hoganhong.airplay-autolink
