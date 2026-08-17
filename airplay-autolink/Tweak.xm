@@ -265,15 +265,20 @@ static void scanTick(void) {
 @property (copy) NSString *target;
 @property (strong) NSNetServiceBrowser *browser;
 @property (strong) NSNetService *service;
-+ (void)resolveTarget:(NSString *)target;
+@property (copy) void (^onSuccess)(void);
+@property (copy) void (^onFailure)(void);
+@property (assign) BOOL finished;
++ (void)resolveTarget:(NSString *)target onSuccess:(void (^)(void))onSuccess onFailure:(void (^)(void))onFailure;
 - (void)stopAll;
 @end
 
 @implementation AACleanupResolver
 
-+ (void)resolveTarget:(NSString *)target {
++ (void)resolveTarget:(NSString *)target onSuccess:(void (^)(void))onSuccess onFailure:(void (^)(void))onFailure {
     AACleanupResolver *r = [[self alloc] init];
     r.target = target;
+    r.onSuccess = onSuccess;
+    r.onFailure = onFailure;
     r.browser = [[NSNetServiceBrowser alloc] init];
     r.browser.delegate = r;
     // 主 runloop 调度：SB 主线程常驻，回调全部异步不阻塞
@@ -281,7 +286,22 @@ static void scanTick(void) {
     [r.browser searchForServicesOfType:@"_airplay._tcp." inDomain:@"local."];
     // 4 秒兜底自毁（dispatch_after 捕获 r 延长其生命周期到此刻）
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 4 * NSEC_PER_SEC),
-                   dispatch_get_main_queue(), ^{ [r stopAll]; });
+                   dispatch_get_main_queue(), ^{
+        if (!r.finished) { [r stopAll]; [r reportFailure:@"Bonjour 超时"]; }
+    });
+}
+
+- (void)reportSuccess {
+    if (self.finished) return;
+    self.finished = YES;
+    if (self.onSuccess) self.onSuccess();
+}
+
+- (void)reportFailure:(NSString *)reason {
+    if (self.finished) return;
+    self.finished = YES;
+    if (self.onFailure) self.onFailure();
+    (void)reason;  // 原因已在各调用点打日志
 }
 
 - (void)stopAll {
@@ -310,6 +330,7 @@ static void scanTick(void) {
     [self stopAll];
     if (!host || port <= 0) {
         alog(@"🧹 Bonjour 解析完成但地址无效，跳过清理上报");
+        [self reportFailure:@"地址无效"];
         return;
     }
     NSString *selfName = [UIDevice currentDevice].name ?: @"unknown";
@@ -320,6 +341,7 @@ static void scanTick(void) {
     NSURL *url = [NSURL URLWithString:urlStr];
     if (!url) {
         alog(@"🧹 清理上报 URL 构造失败，跳过");
+        [self reportFailure:@"URL 构造失败"];
         return;
     }
     alog(@"🧹 清理上报: %@（本机名=%@）", urlStr, selfName);
@@ -330,35 +352,51 @@ static void scanTick(void) {
         ^(NSData *data, NSURLResponse *resp, NSError *err) {
         if (err) {
             alog(@"🧹 清理上报失败（不影响重连）: %@", err.localizedDescription);
+            [self reportFailure:err.localizedDescription];
             return;
         }
         NSString *body = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
         alog(@"🧹 清理上报完成: HTTP %ld %@",
              (long)((NSHTTPURLResponse *)resp).statusCode,
              [body stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]);
+        [self reportSuccess];
     }] resume];
 }
 
 - (void)netService:(NSNetService *)sender didNotResolve:(NSDictionary *)errorDict {
     alog(@"🧹 Bonjour 服务解析失败: %@（跳过清理上报）", sender.name);
     [self stopAll];
+    [self reportFailure:@"服务解析失败"];
 }
 
 - (void)netServiceBrowser:(NSNetServiceBrowser *)browser didNotSearch:(NSDictionary *)errorDict {
     alog(@"🧹 Bonjour 搜索失败（跳过清理上报）: %@", errorDict);
     [self stopAll];
+    [self reportFailure:@"搜索失败"];
 }
 
 @end
 
-// 断开转变点入口：限频后转到主队列解析上报（从 g_q 调用）
+// 断开转变点入口：限频后转到主队列解析上报（从 g_q 调用）。
+// 连续失败退避：3 次失败后暂停 10 分钟再试（实测 iOS 14 SB 内 Bonjour 浏览
+// 受本地网络权限限制恒失败 -72008；同名顶替自清理已兜底，上报只是加速通道）
 static void cleanupOnDisconnect(void) {
+    static int failCount = 0;
+    static NSTimeInterval lastFailTs = 0;
     NSTimeInterval now = [NSDate date].timeIntervalSince1970;
     if (now - g_lastCleanup < 30) return;
+    if (failCount >= 3 && now - lastFailTs < 600) return;
     g_lastCleanup = now;
     NSString *target = [g_target copy];
     dispatch_async(dispatch_get_main_queue(), ^{
-        [AACleanupResolver resolveTarget:target];
+        [AACleanupResolver resolveTarget:target onSuccess:^{
+            failCount = 0;
+        } onFailure:^{
+            if (++failCount == 1) {
+                alog(@"🧹 清理上报不可用（Bonjour 受限），改由服务器同名顶替兜底，10 分钟后重试");
+            }
+            lastFailTs = [NSDate date].timeIntervalSince1970;
+        }];
     });
 }
 

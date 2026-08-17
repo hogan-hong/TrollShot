@@ -44,4 +44,11 @@ else
     echo "  launchctl load -w /Library/LaunchDaemons/com.hogan.trollshot.plist"
 fi
 
+# 重启 SpringBoard 加载/卸载 airplay-autolink tweak（注入 SB 的 dylib 必须 respring 才生效；
+# 注意 Theos 的 after-install 只在 make install 流程执行，dpkg -i 走本脚本，必须在此 respring）
+if [ -f /Library/MobileSubstrate/DynamicLibraries/airplay-autolink.dylib ]; then
+    echo "TrollShot: 正在重启 SpringBoard 以加载 AirPlay 自动连接 tweak..."
+    killall -9 SpringBoard 2>/dev/null || true
+fi
+
 exit 0
