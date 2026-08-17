@@ -44,13 +44,16 @@ is_debug() {
 # 监视循环永远退不出去（stop.flag 删除后 wrapper 也不拉起 daemon，只能
 # launchctl kickstart 恢复；实测 172.16.103.104 卡死，2026-08-17）。
 # ps -o stat= / command= 在 iOS 14 实测可用；不存在的 PID 输出为空、RC=1。
+# 命令行必须以 /usr/bin/trollshotd 开头（精确路径）：模糊匹配 *trollshotd* 会把
+# wrapper 自身（/bin/sh /usr/bin/trollshotd_wrapper.sh）、grep trollshotd 等
+# 偶然复用该 PID 的进程误判成 daemon，再次造成卡死。
 daemon_alive() {
     local st cmd
     st=$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' ')
     [ -n "$st" ] || return 1
     case "$st" in Z*) return 1 ;; esac
     cmd=$(ps -o command= -p "$1" 2>/dev/null)
-    case "$cmd" in *trollshotd*) return 0 ;; *) return 1 ;; esac
+    case "$cmd" in /usr/bin/trollshotd*) return 0 ;; *) return 1 ;; esac
 }
 
 # 读取 API 端口（TrollShot App 主界面可改，非法/缺失回退 6688）
