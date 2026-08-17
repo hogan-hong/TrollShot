@@ -115,6 +115,25 @@ dpkg -r com.hoganhong.airplay-autolink   # 先卸独立包（可跳过，dpkg �
 dpkg -i com.hoganhong.trollshot_<版本>_iphoneos-arm.deb   # 安装即含 tweak，装完自动 respring
 ```
 
+### 安装脚本（postinst）行为说明
+
+安装/升级完成后 postinst 自动完成（顺序执行）：
+
+1. 清除停止标志、修复二进制与 plist 权限；
+2. 加载 launchd daemon 并按 `launchctl list` 实际状态校验；
+3. **显式执行 `uicache` 重建图标缓存**：卸载重装或异常安装后，SpringBoard
+   respring 的自动重扫并不总是刷新图标缓存（实测出现过桌面无图标、资源库
+   搜不到），必须显式重建；
+4. **延迟 12 秒后台 respring**：tweak dylib 注入 SpringBoard 必须 respring 才
+   生效，但不能在 postinst 内立即杀——若用户正用 Zebra/Sileo 等 GUI 包管理器
+   安装，SpringBoard 死时会把包管理器一并杀掉，dpkg 流程中途被斩断、状态库
+   写坏，出现"幽灵安装"（dpkg 显示已装但文件全部缺失，需 `dpkg --purge` 后
+   重装才能恢复）。延迟 12 秒让 dpkg / cydia triggers 先收完尾再 respring。
+
+升级注意：升级期间设备会短暂断开 AirPlay 镜像（respring），tweak 重载后
+自动重连；用 GUI 包管理器升级时，看到"安装完成"提示后请等待约 15 秒再
+操作设备（后台 respring 尚未执行）。
+
 ## 版本号规则
 
 GitHub Actions 每次构建把 `1.0.<构建号>` 注入 deb 的 `Version` 与 App 的

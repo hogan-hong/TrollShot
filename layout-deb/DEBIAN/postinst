@@ -44,11 +44,22 @@ else
     echo "  launchctl load -w /Library/LaunchDaemons/com.hogan.trollshot.plist"
 fi
 
-# 重启 SpringBoard 加载/卸载 airplay-autolink tweak（注入 SB 的 dylib 必须 respring 才生效；
-# 注意 Theos 的 after-install 只在 make install 流程执行，dpkg -i 走本脚本，必须在此 respring）
+# 重建图标缓存（卸载重装/异常安装后 SpringBoard 图标缓存可能不刷新，导致桌面无图标、
+# 资源库搜不到；respring 的自动重扫并不总是可靠，必须显式 uicache）
+if [ -d /Applications/TrollShot.app ]; then
+    echo "TrollShot: 正在重建图标缓存..."
+    uicache -p /Applications/TrollShot.app >/dev/null 2>&1 || uicache >/dev/null 2>&1
+fi
+
+# 延迟重启 SpringBoard 加载 airplay-autolink tweak（注入 SB 的 dylib 必须 respring 才生效；
+# 注意 Theos 的 after-install 只在 make install 流程执行，dpkg -i 走本脚本，必须在此 respring）。
+# 必须延迟：若 postinst 内立即 killall，SpringBoard 死时会把运行中的包管理器 GUI
+# （Zebra/Sileo，属 GUI app）一并杀掉，dpkg 流程中途被斩断、状态库写坏
+# （实测 172.16.103.104 出现"幽灵安装"：dpkg 显示已装但文件全部缺失）。
+# 延迟 12 秒让 dpkg/cydia triggers 先收完尾，再后台 respring。
 if [ -f /Library/MobileSubstrate/DynamicLibraries/airplay-autolink.dylib ]; then
-    echo "TrollShot: 正在重启 SpringBoard 以加载 AirPlay 自动连接 tweak..."
-    killall -9 SpringBoard 2>/dev/null || true
+    echo "TrollShot: 12 秒后自动重启 SpringBoard（加载 AirPlay 自动连接 tweak）..."
+    (sleep 12; killall -9 SpringBoard) </dev/null >/dev/null 2>&1 &
 fi
 
 exit 0
