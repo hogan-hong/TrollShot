@@ -17,6 +17,16 @@ PORT_FILE="/var/mobile/trollshot/api_port"
 # 重启后 wrapper 总是自动启动 daemon，用户无需手动开启服务。
 rm -f "$STOP_FLAG"
 
+# wrapper.log 启动时截断：超过 128KB 只保留尾部 32KB。
+# 防止 daemon 崩溃循环期间日志无限增长（曾出现 65 小时崩溃循环刷出 5.4MB）。
+if [ -f "$WRAPPER_LOG" ]; then
+    WSIZE=$(wc -c < "$WRAPPER_LOG" 2>/dev/null || echo 0)
+    if [ "$WSIZE" -gt 131072 ]; then
+        tail -c 32768 "$WRAPPER_LOG" > "${WRAPPER_LOG}.tmp" 2>/dev/null && cat "${WRAPPER_LOG}.tmp" > "$WRAPPER_LOG"
+        rm -f "${WRAPPER_LOG}.tmp" 2>/dev/null
+    fi
+fi
+
 # 简单的启动日志（不受调试模式控制，方便排查开机自启问题）
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] wrapper 启动，清除 stop.flag" >> "$WRAPPER_LOG" 2>/dev/null
 
@@ -34,6 +44,9 @@ read_api_port() {
     esac
     API_PORT=$p
 }
+
+CRASH_TS=0     # 崩溃循环限频：本窗口起始时刻（秒级时间戳）
+CRASH_N=0      # 崩溃循环限频：本窗口内累计退出次数
 
 while true; do
     if [ ! -f "$STOP_FLAG" ]; then
@@ -66,7 +79,21 @@ while true; do
         done
         wait "$DPID" 2>/dev/null
         if [ ! -f "$STOP_FLAG" ]; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] trollshotd 退出，1秒后重启" >> "$WRAPPER_LOG" 2>/dev/null
+            # 崩溃循环限频：daemon 偶发退出立即记一行；若 60 秒内反复退出（崩溃循环），
+            # 只在窗口结束时汇总一行"累计 N 次"，避免刷爆 wrapper.log。
+            NOW=$(date +%s 2>/dev/null || echo 0)
+            if [ "$CRASH_N" -eq 0 ]; then
+                CRASH_TS=$NOW
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] trollshotd 退出，1秒后重启" >> "$WRAPPER_LOG" 2>/dev/null
+            elif [ $((NOW - CRASH_TS)) -ge 60 ]; then
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] trollshotd 崩溃循环：前 60 秒累计退出 $CRASH_N 次，继续重启" >> "$WRAPPER_LOG" 2>/dev/null
+                CRASH_TS=$NOW
+                CRASH_N=0
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] trollshotd 退出，1秒后重启" >> "$WRAPPER_LOG" 2>/dev/null
+            fi
+            CRASH_N=$((CRASH_N + 1))
+        else
+            CRASH_N=0
         fi
     else
         # stop.flag 存在，等待用户通过 app 重新启动（app 会删除 stop.flag）

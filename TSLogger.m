@@ -63,6 +63,24 @@
         NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [self->_formatter stringFromDate:[NSDate date]], message];
         NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
         [self->_fileHandle writeData:data];
+
+        /* 大小上限：超过 1MB 截断保留尾部 256KB（每 30 秒检查一次），
+         * 防止调试模式长期开启把 TrollShot.log 撑爆 */
+        static NSTimeInterval lastCheck = 0;
+        NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+        if (now - lastCheck < 30) return;
+        lastCheck = now;
+        unsigned long long size = [self->_fileHandle seekToEndOfFile];
+        if (size > 1024 * 1024) {
+            [self->_fileHandle closeFile];
+            NSMutableData *all = [NSMutableData dataWithContentsOfFile:self->_logPath];
+            if (all.length > 256 * 1024) {
+                NSData *tail = [all subdataWithRange:NSMakeRange(all.length - 256 * 1024, 256 * 1024)];
+                [tail writeToFile:self->_logPath atomically:YES];
+            }
+            self->_fileHandle = [NSFileHandle fileHandleForWritingAtPath:self->_logPath];
+            [self->_fileHandle seekToEndOfFile];
+        }
     });
 }
 

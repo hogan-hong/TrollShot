@@ -83,6 +83,8 @@ TrollShot 采用类似 TrollVNC 的后台 daemon 架构：
 **端口热切换**：wrapper 脚本持续监视 `api_port` 文件，App 修改端口后 1~2 秒内自动把 daemon 重启到新端口，无需手动停止/启动服务。服务处于停止状态时保持停止，下次启动服务时直接用新端口。
 
 wrapper 脚本运行日志位于 `/var/mobile/trollshot/wrapper.log`，可用于排查开机自启动问题。
+wrapper.log 有自动保护：wrapper 每次启动时若文件超过 128KB 会截断只保留尾部 32KB；
+daemon 崩溃循环（反复秒退）时按 60 秒窗口汇总写入一行累计次数，不会逐次刷屏。
 
 App 会自动检测运行环境：
 - **检测到系统级 plist（越狱）**：启动/停止通过 `launchctl bootstrap`/`bootout` 操作（兼容旧版 `load`/`unload`），不直接 `posix_spawn`
@@ -298,20 +300,27 @@ iPhone 物理截屏像素固定为 750x1334（竖屏），横屏游戏时自动�
 App 界面提供「调试模式」开关按钮：
 
 - **关闭调试模式（默认）**：daemon 的 stdout/stderr 重定向到 /dev/null 丢弃，TSLogger 不写文件，日志文件不会增长。
-- **开启调试模式**：daemon 带 `--debug` 参数启动，stdout/stderr 重定向到 `/var/mobile/trollshot/trollshotd.log`，TSLogger 写入 `/var/mobile/Documents/TrollShot.log`。开启时可选择清空旧日志。
+- **开启调试模式**：daemon 带 `--debug` 参数启动，stdout/stderr 重定向到 `/var/mobile/trollshot/trollshotd.log`，TSLogger 写入 `/var/mobile/trollshot/TrollShot.log`。开启时可选择清空旧日志。
 
 调试模式状态持久化在 `/var/mobile/trollshot/debug_mode` 标志文件中（内容为 `1` 或 `0`）。切换调试模式时，如果服务正在运行，会自动重启 daemon 使设置立即生效。
 
 ## 日志
 
-调试模式开启时，会产生两个日志文件：
+全部日志文件均受「调试模式」分级控制并带大小上限，长期运行不会把设备存储挤爆：
 
-| 日志文件 | 路径 | 说明 |
-|----------|------|------|
-| daemon 标准输出 | `/var/mobile/trollshot/trollshotd.log` | daemon 进程的 stdout/stderr 重定向输出（posix_spawn dup2） |
-| TSLogger 运行日志 | `/var/mobile/Documents/TrollShot.log` | ScreenCapturer 中 TSLog 宏写入的结构化日志（带时间戳） |
+| 日志文件 | 路径 | 调试模式关闭时 | 调试模式开启时 | 大小上限 |
+|----------|------|----------------|----------------|----------|
+| daemon 标准输出 | `/var/mobile/trollshot/trollshotd.log` | 不写（重定向 /dev/null，每次调试启动先清空） | 写入 | 调试启动时清空 |
+| TSLogger 运行日志 | `/var/mobile/trollshot/TrollShot.log` | 不写（不创建文件） | 写入 | 超 1MB 截断保留尾部 256KB |
+| wrapper 脚本日志 | `/var/mobile/trollshot/wrapper.log` | 只记关键事件（启动/停止/端口切换/崩溃汇总） | 同左 | 启动时超 128KB 截断保留尾部 32KB |
+| AirPlay 自动连接日志 | `/var/mobile/Library/Logs/airplay-autolink.log` | 只记关键事件（镜像建立/断开/错误/清理上报） | 全量（含逐秒 tick 轮询） | 超 1MB 截断保留尾部 256KB |
 
-两个日志文件都只在调试模式开启时才会写入。关闭调试模式后不会产生新的日志内容。
+说明：
+
+- 关键事件始终落盘：镜像建立成功/断开触发重连/看门狗卡死/清理上报等低频但排障必需的事件，调试模式关闭时也会记录。
+- 逐秒轮询噪音（发现层扫描、等待协商、兜底心跳）只在调试模式开启时落盘。tweak 注入在 SpringBoard 内，每 60 秒重读一次 `debug_mode` 标志，App 里切换开关后 1 分钟内生效，无需重启设备。
+- 历史教训：曾因旧版 daemon 崩溃循环（CoreImage 截图路径 bug）65 小时刷出 5.4MB 的 wrapper.log；新版已修复该 bug，且上述限频+截断双保险确保即使再出现崩溃循环，日志量也被压在数百 KB 以内。
+- 系统的 `/var/mobile/Library/Logs/CrashReporter/`（崩溃报告）不受以上机制管辖，如积累过大可手动清理：`rm -f /var/mobile/Library/Logs/CrashReporter/trollshotd-*.ips`。
 
 可以通过 SSH 或文件管理工具导出日志进行排查。
 
@@ -319,7 +328,7 @@ App 界面提供「调试模式」开关按钮：
 
 - **TrollStore 环境**：点击"停止服务"向 `trollshotd` 进程发送 SIGTERM，1 秒内未退出则发送 SIGKILL，最后 `killall -9` 兜底。
 - **越狱环境**：点击"停止服务"先执行 `launchctl bootout`/`unload` 卸载系统级 plist，再 kill 进程。如果权限不足会弹出错误提示，需通过 SSH 以 root 手动执行 `launchctl unload`。
-- 卸载 IPA/.deb：系统会自动删除 app bundle，已复制到 `/var/mobile/trollshot/` 的 daemon、日志和 `/var/mobile/Documents/TrollShot.log` 不会自动清理，可手动删除。越狱 `.deb` 卸载时 `prerm` 脚本会自动停止 daemon 并卸载 launchd plist，无需手动清理 `/Library/LaunchDaemons/com.hogan.trollshot.plist`。
+- 卸载 IPA/.deb：系统会自动删除 app bundle，已复制到 `/var/mobile/trollshot/` 的 daemon 和日志不会自动清理，可手动删除。越狱 `.deb` 卸载时 `prerm` 脚本会自动停止 daemon 并卸载 launchd plist，无需手动清理 `/Library/LaunchDaemons/com.hogan.trollshot.plist`。
 
 ## 局限
 

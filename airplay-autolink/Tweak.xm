@@ -32,6 +32,9 @@
 //   interval  上下文缺失时重试间隔秒（默认 25）
 //   fallback  空闲态兜底轮询间隔秒（默认 120，最小 30）
 // 日志：/var/mobile/Library/Logs/airplay-autolink.log
+//   受 TrollShot App「调试模式」分级控制（60 秒缓存读取 debug_mode 标志）：
+//   关闭时只落盘关键事件（镜像建立/断开/错误/清理上报），逐秒 tick 轮询噪音仅 NSLog 不落盘；
+//   文件超 1MB 自动截断保留尾部 256KB，长期运行不会挤爆设备存储。
 #import <Foundation/Foundation.h>
 #import <UIKit/UIDevice.h>
 
@@ -74,14 +77,60 @@ static int g_fbCount = 0;               // 兜底轮询计数（心跳日志用�
 static BOOL g_stateKnown = NO;          // 是否已判定过初始状态（重启后首判即断开也算断开转变）
 static NSTimeInterval g_lastCleanup = 0; // 上次清理上报时刻（30 秒限频）
 
-static void alog(NSString *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
+/* 调试模式联动：读 TrollShot 的 debug_mode 标志（60 秒缓存，GUI 切换后 1 分钟内生效）。
+ * 关闭时本 tweak 只写关键事件（建立镜像/断开/错误/清理上报），逐秒 tick 轮询噪音不落盘，
+ * 避免长期运行把 airplay-autolink.log 撑爆。 */
+static BOOL g_dbgFlag = NO;
+static NSTimeInterval g_dbgCheckedAt = 0;
+
+static BOOL debugLogEnabled(void) {
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if (now - g_dbgCheckedAt > 60) {
+        g_dbgCheckedAt = now;
+        NSString *s = [NSString stringWithContentsOfFile:@"/var/mobile/trollshot/debug_mode"
+                                                encoding:NSUTF8StringEncoding error:nil];
+        g_dbgFlag = [s stringByTrimmingCharactersInSet:
+                     [NSCharacterSet whitespaceAndNewlineCharacterSet]] isEqualToString:@"1"];
+    }
+    return g_dbgFlag;
+}
+
+/* 日志文件大小上限：超过 1MB 时截断保留尾部 256KB（30 秒内只检查一次，降低开销） */
+static void alog_rotate_if_needed(NSString *path) {
+    static NSTimeInterval lastCheck = 0;
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if (now - lastCheck < 30) return;
+    lastCheck = now;
+    NSDictionary *attr = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
+    long long size = [attr fileSize];
+    if (size > 1024 * 1024) {
+        NSMutableData *data = [NSMutableData dataWithContentsOfFile:path];
+        if (data.length > 256 * 1024) {
+            NSRange tail = NSMakeRange(data.length - 256 * 1024, 256 * 1024);
+            /* 对齐到整行边界，避免截出半行 */
+            const char *bytes = data.bytes;
+            while (tail.location < data.length && bytes[tail.location] != '\n') {
+                tail.location++;
+                tail.length--;
+            }
+            if (tail.location < data.length) {
+                tail.location++;
+                tail.length--;
+            }
+            if (tail.length > 0) {
+                [[data subdataWithRange:tail] writeToFile:path atomically:YES];
+            }
+        }
+    }
+}
+
+static void alog_impl(BOOL force, NSString *fmt, va_list args) {
     NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:args];
-    va_end(args);
     NSLog(@"[airplay-autolink] %@", msg);
+    if (!force && !debugLogEnabled()) return; /* 非关键事件且调试关闭：只留 NSLog（内存 oslog），不落盘 */
     NSString *line = [NSString stringWithFormat:@"%@ %@\n", [NSDate date], msg];
     NSString *path = @"/var/mobile/Library/Logs/airplay-autolink.log";
+    alog_rotate_if_needed(path);
     NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
     if (!fh) {
         [@"" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
@@ -94,6 +143,22 @@ static void alog(NSString *fmt, ...) {
         [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
         [fh closeFile];
     }
+}
+
+/* 关键事件：始终落盘（镜像建立/断开/错误/清理上报，低频） */
+static void alog(NSString *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    alog_impl(YES, fmt, args);
+    va_end(args);
+}
+
+/* 常规/轮询日志：仅调试模式开启时落盘（每秒 tick 等，高频噪音） */
+static void alog_dbg(NSString *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    alog_impl(NO, fmt, args);
+    va_end(args);
 }
 
 static void later(NSTimeInterval sec, dispatch_block_t block) {
@@ -143,7 +208,7 @@ static void armWatchdog(int seq) {
 static void stateCheck(NSString *src) {
     MRAVOutputContext *ctx = [MRAVOutputContext sharedSystemScreenContext];
     if (!ctx) {
-        alog(@"[%@] 屏幕上下文 nil，%.0fs 后重试", src, g_interval);
+            alog_dbg(@"[%@] 屏幕上下文 nil，%.0fs 后重试", src, g_interval);
         later(g_interval, ^{ stateCheck(@"重试"); });
         return;
     }
@@ -187,7 +252,7 @@ static void scanTick(void) {
         g_step = @"sharedSystemScreenContext";
         MRAVOutputContext *ctx = [MRAVOutputContext sharedSystemScreenContext];
         if (!ctx) {
-            alog(@"tick#%d 屏幕上下文 nil，%.0fs 后重试", seq, g_interval);
+            alog_dbg(@"tick#%d 屏幕上下文 nil，%.0fs 后重试", seq, g_interval);
             g_step = @"等待重试";
             later(g_interval, ^{ scanTick(); });
             return;
@@ -218,7 +283,7 @@ static void scanTick(void) {
                      [names componentsJoinedByString:@","]);
             }];
             g_scanTicks = 0;
-            alog(@"tick#%d 发现会话已建(features=2,mode=2)扫描 target=%@", seq, g_target);
+                alog_dbg(@"tick#%d 发现会话已建(features=2,mode=2)扫描 target=%@", seq, g_target);
         }
         g_step = @"读取availableOutputDevices";
         NSArray *devs = g_sess.availableOutputDevices;
@@ -226,7 +291,7 @@ static void scanTick(void) {
             if ([d.name.lowercaseString containsString:g_target.lowercaseString]) {
                 // 防补枪：上次发起未满 15 秒且仍未见镜像 = 连接仍在协商，稍候再查，不重发
                 if ([NSDate date].timeIntervalSince1970 - g_lastFire < 15) {
-                    alog(@"tick#%d 命中 %@ 但距上次发起<15s，等待协商完成", seq, d.name);
+                    alog_dbg(@"tick#%d 命中 %@ 但距上次发起<15s，等待协商完成", seq, d.name);
                     g_step = @"等待协商";
                     later(5, ^{ scanTick(); });
                     return;
@@ -244,7 +309,7 @@ static void scanTick(void) {
                 return;
             }
         }
-        alog(@"tick#%d 发现层: %lu 台设备", seq, (unsigned long)devs.count);
+        alog_dbg(@"tick#%d 发现层: %lu 台设备", seq, (unsigned long)devs.count);
         // 40 秒扫不到就重建会话（防会话僵死）
         if (++g_scanTicks > 40) {
             g_sess = nil;
@@ -432,7 +497,7 @@ static void fallbackLoop(void) {
     later(g_fallback, ^{
         g_fbCount++;
         if (g_fbCount % 30 == 0 && g_mirroring) {
-            alog(@"心跳: 守护运行中，镜像进行中(兜底轮询第 %d 拍)", g_fbCount);
+            alog_dbg(@"心跳: 守护运行中，镜像进行中(兜底轮询第 %d 拍)", g_fbCount);
         }
         stateCheck(@"兜底轮询");
         fallbackLoop();
