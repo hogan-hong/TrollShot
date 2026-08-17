@@ -89,8 +89,8 @@ static BOOL debugLogEnabled(void) {
         g_dbgCheckedAt = now;
         NSString *s = [NSString stringWithContentsOfFile:@"/var/mobile/trollshot/debug_mode"
                                                 encoding:NSUTF8StringEncoding error:nil];
-        g_dbgFlag = [s stringByTrimmingCharactersInSet:
-                     [NSCharacterSet whitespaceAndNewlineCharacterSet]] isEqualToString:@"1"];
+        g_dbgFlag = [[s stringByTrimmingCharactersInSet:
+                      [NSCharacterSet whitespaceAndNewlineCharacterSet]] isEqualToString:@"1"];
     }
     return g_dbgFlag;
 }
@@ -108,7 +108,7 @@ static void alog_rotate_if_needed(NSString *path) {
         if (data.length > 256 * 1024) {
             NSRange tail = NSMakeRange(data.length - 256 * 1024, 256 * 1024);
             /* 对齐到整行边界，避免截出半行 */
-            const char *bytes = data.bytes;
+            const char *bytes = (const char *)data.bytes;
             while (tail.location < data.length && bytes[tail.location] != '\n') {
                 tail.location++;
                 tail.length--;
