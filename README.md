@@ -78,7 +78,9 @@ TrollShot 采用类似 TrollVNC 的后台 daemon 架构：
 
 **开机自启动**：`.deb` 安装后，设备重启（或半绑定越狱重新越狱）时 launchd 会自动加载 plist 启动 wrapper 脚本，wrapper 脚本启动时会清除运行时停止标志（`stop.flag`），确保每次开机都自动启动 daemon，无需手动打开 App。
 
-通过 App 停止服务时，daemon 写入 `stop.flag` 标志文件并退出，wrapper 脚本检测到标志后暂停重启。通过 App 重新启动服务时，App 删除 `stop.flag`，wrapper 脚本自动恢复 daemon。`stop.flag` 仅作为运行时信号，不跨重启持久化。
+通过 App 停止服务时，daemon 写入 `stop.flag` 标志文件并退出，wrapper 脚本检测到标志后暂停重启（同时兜底 kill 残留进程）。通过 App 重新启动服务时，App 删除 `stop.flag`，wrapper 脚本自动恢复 daemon。`stop.flag` 仅作为运行时信号，不跨重启持久化。
+
+**端口热切换**：wrapper 脚本持续监视 `api_port` 文件，App 修改端口后 1~2 秒内自动把 daemon 重启到新端口，无需手动停止/启动服务。服务处于停止状态时保持停止，下次启动服务时直接用新端口。
 
 wrapper 脚本运行日志位于 `/var/mobile/trollshot/wrapper.log`，可用于排查开机自启动问题。
 
@@ -172,7 +174,7 @@ UxPlay 服务器，正常情况零人工操作：
 
 | 配置项 | 默认值 | 存储 | 生效方式 |
 |--------|--------|------|----------|
-| API 端口 | `6688` | `/var/mobile/trollshot/api_port` | 编辑结束保存，daemon 运行中自动重启生效 |
+| API 端口 | `6688` | `/var/mobile/trollshot/api_port` | 编辑结束保存，wrapper 监视端口文件，1~2 秒自动重启 daemon 到新端口；服务停止时下次启动生效 |
 | AirPlay 服务器名 | `TrollShot` | `/var/mobile/Library/Preferences/com.hoganhong.airplay-autolink.plist` 的 `target` 键 | 编辑结束保存，tweak 在下次镜像断开转变时热加载，无需重启 SpringBoard |
 
 ## AirPlay 自动连接（airplay-autolink，v7.0 整合）

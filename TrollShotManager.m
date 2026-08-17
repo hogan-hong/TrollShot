@@ -136,6 +136,34 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
     return [p writeToFile:kAutolinkPlist atomically:YES];
 }
 
+/* 服务是否被用户主动停止（stop.flag 存在，wrapper 检测到后不会拉起 daemon） */
++ (BOOL)isServiceStoppedByUser {
+    return [[NSFileManager defaultManager] fileExistsAtPath:@"/var/mobile/trollshot/stop.flag"];
+}
+
+/* 端口文件更新后调用，让 daemon 切到新端口 */
+- (BOOL)applyPortChange {
+    /* deb 环境：wrapper 脚本监视端口文件，检测到变化即自动重启 daemon，
+     * 这里只需等新端口就绪（最多 6 秒） */
+    if ([[NSFileManager defaultManager] fileExistsAtPath:kSystemPlistPath]) {
+        if ([TrollShotManager isServiceStoppedByUser]) {
+            /* 服务被主动停止：保持停止，下次启动服务时用新端口 */
+            return YES;
+        }
+        for (int i = 0; i < 60; i++) {
+            if ([self isDaemonRunning]) return YES;
+            [NSThread sleepForTimeInterval:0.1];
+        }
+        return [self isDaemonRunning];
+    }
+
+    /* TrollStore 环境：无 wrapper，清理旧端口进程后按新端口重新拉起 */
+    if (![self isDaemonRunning]) return YES;
+    [self killDaemonProcesses];
+    [NSThread sleepForTimeInterval:0.2];
+    return [self startDaemon:nil];
+}
+
 /* 获取 IPA 内部的 daemon 路径 */
 - (NSString *)bundledDaemonPath {
     return [[self bundlePath] stringByAppendingPathComponent:kDaemonName];
@@ -552,7 +580,13 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict,
      * 也无权 unload 系统级 launchd plist。通过 HTTP /shutdown 请求让 daemon
      * 自行卸载 launchd 并退出。 */
     if ([[NSFileManager defaultManager] fileExistsAtPath:kSystemPlistPath]) {
-        if ([self isDaemonRunning] && [self sendShutdownRequest]) {
+        /* 幂等：检测不到运行（可能本就停止，或已切到新端口）直接视为停止成功，
+         * 避免误报"无法停止服务" */
+        if (![self isDaemonRunning]) {
+            [[NSFileManager defaultManager] removeItemAtPath:[self pidFilePath] error:nil];
+            return YES;
+        }
+        if ([self sendShutdownRequest]) {
             /* 等待 daemon 自行关闭（最多 3 秒） */
             for (int i = 0; i < 30; i++) {
                 if (![self isDaemonRunning]) {

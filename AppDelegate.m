@@ -305,7 +305,9 @@
             textField.text = [NSString stringWithFormat:@"%ld", (long)[TrollShotManager apiPort]];
             return;
         }
-        [self restartDaemonIfNeeded];
+        /* wrapper 脚本监视端口文件，自动把 daemon 重启到新端口（等待就绪）；
+         * 服务被主动停止时保持停止 */
+        [[TrollShotManager sharedManager] applyPortChange];
         [self refreshUI];
     } else if (textField.tag == 2) {
         NSString *name = [textField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];

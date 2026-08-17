@@ -27,10 +27,19 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)isDebugMode;
 + (BOOL)setDebugMode:(BOOL)enabled;
 
-/* API 端口读写（持久化到 /var/mobile/trollshot/api_port，默认 6688；
- * daemon 启动参数与运行检测都读此值，修改后需重启服务生效 */
+/* API 端口读写（持久化到 /var/mobile/trollshot/api_port，默认 6688）：
+ * wrapper 脚本监视此文件，修改后 1~2 秒自动把 daemon 重启到新端口；
+ * 服务处于停止状态时下次启动服务生效 */
 + (NSInteger)apiPort;
 + (BOOL)setApiPort:(NSInteger)port;
+
+/* 服务是否被用户主动停止（stop.flag 存在） */
++ (BOOL)isServiceStoppedByUser;
+
+/* 端口文件更新后调用，让 daemon 切到新端口：
+ * deb 环境 wrapper 自动重启 daemon，这里等待新端口就绪；
+ * TrollStore 环境无 wrapper，清理旧进程后重新拉起 */
+- (BOOL)applyPortChange;
 
 /* AirPlay 服务器名读写（持久化到 airplay-autolink tweak 的 plist target 键）：
  * 屏幕镜像自动连接时匹配的服务器名（包含匹配），默认 TrollShot。
