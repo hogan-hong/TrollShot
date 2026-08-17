@@ -80,7 +80,9 @@ TrollShot 采用类似 TrollVNC 的后台 daemon 架构：
 
 通过 App 停止服务时，daemon 写入 `stop.flag` 标志文件并退出，wrapper 脚本检测到标志后暂停重启（同时兜底 kill 残留进程）。通过 App 重新启动服务时，App 删除 `stop.flag`，wrapper 脚本自动恢复 daemon。`stop.flag` 仅作为运行时信号，不跨重启持久化。
 
-**端口热切换**：wrapper 脚本持续监视 `api_port` 文件，App 修改端口后 1~2 秒内自动把 daemon 重启到新端口，无需手动停止/启动服务。服务处于停止状态时保持停止，下次启动服务时直接用新端口。
+**端口热切换**：wrapper 脚本持续监视 `api_port` 文件，App 修改端口后 1~2 秒内自动把 daemon 重启到新端口，无需手动停止/启动服务。服务处于停止状态时保持停止，下次启动服务时直接用新端口。（注意：此功能依赖 `/var/mobile/trollshot` 目录归属 mobile，安装脚本已自动修正，见下文 postinst 说明。）
+
+**wrapper 监视防卡死**：监视循环以"进程存在 + 非僵尸 + 命令行仍为 trollshotd"三重校验判活。早期版本用 `kill -0` 判活，daemon 退出后 PID 若被系统其他进程复用，`kill -0` 永远返回成功，监视循环永远无法退出--表现为服务停止后点"启动服务"超时、stop.flag 删除后 daemon 也不被拉起，只能 `launchctl kickstart -k system/com.hogan.trollshot` 恢复（实测 172.16.103.104 卡死，2026-08-17 修复）。
 
 wrapper 脚本运行日志位于 `/var/mobile/trollshot/wrapper.log`，可用于排查开机自启动问题。
 wrapper.log 有自动保护：wrapper 每次启动时若文件超过 128KB 会截断只保留尾部 32KB；
@@ -124,7 +126,12 @@ dpkg -i com.hoganhong.trollshot_<版本>_iphoneos-arm.deb   # 安装即含 tweak
 3. **显式执行 `uicache` 重建图标缓存**：卸载重装或异常安装后，SpringBoard
    respring 的自动重扫并不总是刷新图标缓存（实测出现过桌面无图标、资源库
    搜不到），必须显式重建；
-4. **respring 按安装途径自动区分**：
+4. **数据目录归属修正为 mobile**（`chown -R mobile:mobile /var/mobile/trollshot`）：
+   App 以 mobile 身份运行，改端口要写 `api_port`、启动服务要删 `stop.flag`；
+   安装脚本以 root 建目录，不修正归属则这两个操作都会静默失败（实测
+   172.16.103.104：改端口后界面回弹 6688、点"启动服务"超时）。旧版本设备
+   升级安装后自动修复，无需手工处理；
+5. **respring 按安装途径自动区分**：
    - **GUI 包管理器（Zebra/Sileo）安装：脚本不自动 respring**。包内含
      MobileSubstrate tweak，GUI 安装完成页会自动出现"重启 SpringBoard"按钮
      （与其他插件一致），点击后 tweak 生效；避免脚本自行 respring 打断 GUI

@@ -17,6 +17,10 @@ PORT_FILE="/var/mobile/trollshot/api_port"
 # 重启后 wrapper 总是自动启动 daemon，用户无需手动开启服务。
 rm -f "$STOP_FLAG"
 
+# 数据目录归属自愈为 mobile（wrapper 以 root 运行）：App 改端口要写 api_port、
+# 启动服务要删 stop.flag，目录若归 root 会导致两个操作静默失败（详见 postinst 注释）。
+chown -R mobile:mobile /var/mobile/trollshot 2>/dev/null
+
 # wrapper.log 启动时截断：超过 128KB 只保留尾部 32KB。
 # 防止 daemon 崩溃循环期间日志无限增长（曾出现 65 小时崩溃循环刷出 5.4MB）。
 if [ -f "$WRAPPER_LOG" ]; then
@@ -33,6 +37,20 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] wrapper 启动，清除 stop.flag" >> "$WRA
 # 检查调试模式是否开启
 is_debug() {
     [ -f "$DEBUG_FLAG" ] && [ "$(cat "$DEBUG_FLAG" 2>/dev/null)" = "1" ]
+}
+
+# daemon 存活判定：进程存在 + 非僵尸 + 命令行仍是 trollshotd，三重校验。
+# 早期版本用 kill -0 判活：daemon 退出后 PID 被系统其他进程复用时 kill -0 永远"成功"，
+# 监视循环永远退不出去（stop.flag 删除后 wrapper 也不拉起 daemon，只能
+# launchctl kickstart 恢复；实测 172.16.103.104 卡死，2026-08-17）。
+# ps -o stat= / command= 在 iOS 14 实测可用；不存在的 PID 输出为空、RC=1。
+daemon_alive() {
+    local st cmd
+    st=$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' ')
+    [ -n "$st" ] || return 1
+    case "$st" in Z*) return 1 ;; esac
+    cmd=$(ps -o command= -p "$1" 2>/dev/null)
+    case "$cmd" in *trollshotd*) return 0 ;; *) return 1 ;; esac
 }
 
 # 读取 API 端口（TrollShot App 主界面可改，非法/缺失回退 6688）
@@ -63,7 +81,8 @@ while true; do
         fi
         DPID=$!
         # 监视循环：daemon 退出 / 用户停止 / 端口文件变化，任一发生即跳出重启
-        while kill -0 "$DPID" 2>/dev/null; do
+        # （daemon_alive 防 PID 复用/僵尸卡死，见函数注释）
+        while daemon_alive "$DPID"; do
             if [ -f "$STOP_FLAG" ]; then
                 kill "$DPID" 2>/dev/null
                 echo "[$(date '+%Y-%m-%d %H:%M:%S')] stop.flag 出现，停止 daemon" >> "$WRAPPER_LOG" 2>/dev/null

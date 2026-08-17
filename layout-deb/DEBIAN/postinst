@@ -9,6 +9,12 @@ rm -f /var/mobile/trollshot/stop.flag
 # 确保 /var/mobile/trollshot 目录存在
 mkdir -p /var/mobile/trollshot
 
+# 目录归属修正为 mobile：TrollShot App 以 mobile 身份运行，改端口需写 api_port、
+# 启动服务需删 stop.flag；本脚本以 root 执行 mkdir，若不修正归属，App 的这两个操作
+# 都会静默失败（实测 172.16.103.104：改端口后界面回弹 6688、点"启动服务"超时）。
+# daemon 以 root 运行，不受归属影响。旧版本设备升级安装时自动修复，无需手工处理。
+chown -R mobile:mobile /var/mobile/trollshot 2>/dev/null
+
 # 修复权限（deb 安装可能保留错误的 owner）
 chown root:wheel /usr/bin/trollshotd 2>/dev/null
 chmod 755 /usr/bin/trollshotd 2>/dev/null
